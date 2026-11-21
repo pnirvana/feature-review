@@ -242,8 +242,9 @@ Built in this order, each step usable on its own:
    Every claim cites file and lines (the tool extracts the code from git; nothing is
    pasted).
 
-   **Specified in `docs/annotations.md` (2026-11-21).** Built: `fr hunks`, `fr check`,
-   groups in the viewer.
+   **Built (2026-11-21), specified in `docs/annotations.md`:** `fr hunks`, `fr check`,
+   the groups lens, ghosts and test intents under their hunks, the overview (`m`) with
+   design, names, contracts and rollout.
 3. **Cheap objective signals:**
    - verified mechanical changes;
    - tests changed together with code;

@@ -274,6 +274,23 @@ export async function checkAnnotations(ann, ws) {
     });
   });
 
+  const ro = ann.rollout;
+  if (ro != null) {
+    if (typeof ro !== 'object' || Array.isArray(ro)) err('rollout', 'must be an object, or null');
+    else {
+      const names = new Set(ws.repos.map((r) => r.name));
+      const svc = (list, at) => (Array.isArray(list) ? list : []).forEach((n, i) => !names.has(n) && warn(`${at}[${i}]`, `"${n}" is not a worktree of the feature`));
+      if (ro.order !== undefined && !Array.isArray(ro.order)) err('rollout.order', 'must be a list of worktree names');
+      svc(ro.order, 'rollout.order');
+      (Array.isArray(ro.partial) ? ro.partial : []).forEach((p, i) => {
+        oneOf(p?.risk, ENUMS.risk, `rollout.partial[${i}].risk`);
+        svc(p?.deployed, `rollout.partial[${i}].deployed`);
+        svc(p?.not, `rollout.partial[${i}].not`);
+      });
+      (Array.isArray(ro.config) ? ro.config : []).forEach((c, i) => needRef(c?.ref, `rollout.config[${i}].ref`));
+    }
+  }
+
   // coverage: every unit in exactly one group
   const unitGroups = new Map();
   for (const { g, units } of groups) for (const u of units) unitGroups.set(u, [...(unitGroups.get(u) ?? []), g.id]);

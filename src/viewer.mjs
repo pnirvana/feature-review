@@ -9,6 +9,7 @@ import { readState, update, setMarks, addComment, editComment, deleteComment } f
 import { buildRows, highlightFiles, fid, unitsOf, readingOrder, groupFoldId, UNGROUPED } from './rows.mjs';
 import { annotationsPath, readAnnotations, checkAnnotations } from './annotations.mjs';
 import { queryColors, applyTheme } from './ui/theme.mjs';
+import { overviewRows, tabBar, TABS } from './overview.mjs';
 import { ESC, fit, plain, charWidth, strWidth, segsWidth } from './md/term.mjs';
 import { textField, keyField, fieldText, fieldRows, fieldMode } from './ui/textfield.mjs';
 
@@ -19,6 +20,7 @@ const HELP = [
   '',
   'j k ↑↓          move                    ctrl-d/u half a page   ctrl-f/b a page   gg G top / end',
   'tab             lens: the agent\'s groups (reading order, riskiest first) or the services',
+  'm               the overview: design, names, contracts, rollout (h l or 1-4: tab, ⏎: to the code, m: back)',
   ']] [[           next / previous file    ]g [g  group (services lens: service)',
   ']h [h           next / previous hunk    ]u [u  next / previous hunk not reviewed yet',
   ']c [c           next / previous comment',
@@ -66,6 +68,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     error: null,
     loading: false,
     highlighting: false,
+    ov: null, // the overview when open: {tab, rows, cur, top, expanded}
   };
 
   const W = () => out.columns || 100;
@@ -120,6 +123,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
       if (!ui.ws) return;
       await loadAnnotations(ui.ws);
       relayout();
+      if (ui.ov) ui.ann ? ovLayout() : (ui.ov = null);
       flash(ui.annError ? `annotations: ${ui.annError}` : ui.ann ? 'annotations reloaded' : 'annotations removed', ui.annError ? 'red' : 'green');
     });
   }
@@ -184,6 +188,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
   // ---------- drawing ----------
   function header() {
     if (!ui.ws) return [[' fr ', 'bold inverse'], [ui.loading ? ' reading…' : '', 'dim']];
+    if (ui.ov) return [[' fr ', 'bold inverse'], [` ${ui.ws.name}   `, 'bold'], ...tabBar(ui.ann, ui.ov.tab)];
     const all = order();
     const done = all.filter((u) => marked(u.unit)).length;
     return [
@@ -203,7 +208,8 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     const l = r.line && typeof r.line === 'object' ? `:${r.line.side === 'old' ? '-' : '+'}${r.line.n}` : '';
     return `${x.repo.name}/${x.f.file}${l}`;
   }
-  const KEYS = 'tab lens  j/k move  ]] file  ]u not reviewed  v reviewed  space fold  c comment  o editor  s layout  / search  ? help  q quit';
+  const KEYS = 'tab lens  m overview  j/k move  ]] file  ]u not reviewed  v reviewed  space fold  c comment  o editor  s layout  / search  ? help  q quit';
+  const OV_KEYS = 'h/l or 1-4 tab  j/k move  ⏎ to the code  m/esc back to the review  q quit';
   function footer() {
     const w = W();
     if (ui.input) {
@@ -217,6 +223,12 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
         [[' ' + ui.input.label, 'bold yellow'], ...viMode, [mode ? '   esc normal mode · ⏎ there sends' : '   ⏎ save · alt+⏎ new line · esc cancel', 'dim']],
         ...rows.map((segs, i) => [[(i === 0 && above) || (i === rows.length - 1 && below) ? ' ⋮ ' : ' │ ', 'gray'], ...segs]),
       ];
+    }
+    if (ui.ov) {
+      const msg = ui.flash && ui.flash.until > Date.now() ? [[' ' + ui.flash.msg, ui.flash.style]] : [[' ' + OV_KEYS, 'dim']];
+      const r = ui.ov.rows[ui.ov.cur];
+      const hint = r?.kind === 'ref' && r.res?.ok ? (r.res.units.length ? '⏎ go to this code in the review' : '⏎ show / hide this code') : '';
+      return [msg, [[' ', ''], [hint, 'gray']]];
     }
     // a message or the search replaces the key hints; where the cursor is stays shown
     const loc = where(ui.rows[ui.cur]);
@@ -239,7 +251,13 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     if (ui.help) body = HELP.map((l, i) => [[' ' + l, i === 0 ? 'bold' : '']]);
     else if (ui.error) body = [[[` ${ui.error}`, 'red']], [['  r: try again · q: quit', 'dim']]];
     else if (!ui.ws) body = [[[' reading the worktrees…', 'dim']]];
-    else {
+    else if (ui.ov) {
+      const o = ui.ov;
+      if (o.cur < o.top) o.top = o.cur;
+      if (o.cur >= o.top + bodyH) o.top = o.cur - bodyH + 1;
+      o.top = Math.max(0, Math.min(o.top, Math.max(0, o.rows.length - bodyH)));
+      body = [[], ...o.rows.slice(o.top, o.top + bodyH - 1).map((r, i) => [...(o.top + i === o.cur ? [['▌', 'cyan bold']] : [[' ', '']]), [' ', ''], ...r.segs])];
+    } else {
       if (ui.cur < ui.top) ui.top = ui.cur;
       if (ui.cur >= ui.top + bodyH) ui.top = ui.cur - bodyH + 1;
       ui.top = Math.max(0, Math.min(ui.top, Math.max(0, ui.rows.length - bodyH)));
@@ -339,6 +357,104 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     while (end + 1 < ui.rows.length && ui.rows[end + 1].hunk === u.hunk) end++;
     const bodyH = H() - 3;
     if (end - i < bodyH && end >= ui.top + bodyH) ui.top = end - bodyH + 1;
+  }
+
+  // ---------- the overview ----------
+  function ovLayout() {
+    const o = ui.ov;
+    o.rows = overviewRows(ui.ann, o.tab, { width: Math.max(30, W() - 3), expanded: o.expanded });
+    o.cur = Math.max(0, Math.min(o.cur, o.rows.length - 1));
+  }
+  function openOverview() {
+    if (!ui.ann) return flash(ui.annError ? `annotations: ${ui.annError}` : `no annotations: the agent writes them to ${annotationsPath(ui.ws.root)}`, 'yellow');
+    // the first tab with something in it
+    const tab = ui.lastTab ?? TABS.find((t) => t.count(ui.ann.ann))?.id ?? 'design';
+    ui.ov = { tab, rows: [], cur: 0, top: 0, expanded: new Set() };
+    ovLayout();
+    ovMove(0);
+  }
+  function ovTab(id) {
+    if (!TABS.some((t) => t.id === id)) return;
+    ui.ov = { ...ui.ov, tab: id, cur: 0, top: 0 };
+    ui.lastTab = id;
+    ovLayout();
+    ovMove(0);
+  }
+  /** Move in the overview, skipping spacing rows. */
+  function ovMove(d) {
+    const o = ui.ov;
+    const ok = (r) => r && !r.spacer && r.segs.length;
+    let i = o.cur;
+    if (d === 0) {
+      while (i < o.rows.length - 1 && !ok(o.rows[i])) i++;
+      o.cur = i;
+      return;
+    }
+    const step = Math.sign(d);
+    for (let n = Math.abs(d); n > 0; n--) {
+      let j = i + step;
+      while (j >= 0 && j < o.rows.length && !ok(o.rows[j])) j += step;
+      if (j < 0 || j >= o.rows.length) break;
+      i = j;
+    }
+    o.cur = i;
+  }
+  /** ⏎ in the overview: a citation of the change goes to its code in the review; another shows its code here. */
+  function ovEnter() {
+    const r = ui.ov.rows[ui.ov.cur];
+    if (r?.kind !== 'ref' && r?.kind !== 'code') return flash('⏎ works on a citation (a path:lines line)', 'dim');
+    const res = r.res ?? ui.ann.refs.get(r.ref);
+    if (!res?.ok) return flash(res ? `does not resolve: ${res.error}` : 'not a citation', 'red');
+    if (!res.units.length) {
+      const e = ui.ov.expanded;
+      e.has(r.ref) ? e.delete(r.ref) : e.add(r.ref);
+      const at = ui.ov.cur;
+      ovLayout();
+      ui.ov.cur = Math.min(at, ui.ov.rows.length - 1);
+      return;
+    }
+    ui.lastTab = ui.ov.tab;
+    ui.ov = null;
+    jumpTo(res);
+  }
+  /** Go to cited lines of the change in the review: unfold their group, file and hunk. */
+  function jumpTo(res) {
+    const unit = res.units[0];
+    const u = order().find((x) => x.unit === unit);
+    if (!u) return relayout();
+    ui.fold.set(u.fid, false);
+    if (u.hunk) ui.fold.set(u.hunk, false);
+    if (lensNow() === 'groups') ui.fold.set(groupFoldId(u.group ?? UNGROUPED), false);
+    relayout();
+    const inLines = (x) => x.kind === 'code' && x.hunk === unit && x.line?.side === res.side && x.line.n >= res.from && x.line.n <= res.to;
+    let i = ui.rows.findIndex(inLines);
+    if (i < 0) i = ui.rows.findIndex((x) => (u.hunk ? x.kind === 'hunk' && x.hunk === unit : x.units?.includes(unit)));
+    if (i >= 0) {
+      ui.cur = i;
+      ui.top = Math.max(0, i - 3);
+    }
+    flash(`${res.repo}/${res.file}:${res.from === res.to ? res.from : `${res.from}-${res.to}`}`, 'cyan');
+  }
+  function ovKey(k) {
+    const half = Math.max(1, Math.floor((H() - 3) / 2));
+    const p = ui.pending;
+    ui.pending = '';
+    const i = TABS.findIndex((t) => t.id === ui.ov.tab);
+    if (p === 'g' && k === 'g') (ui.ov.cur = 0), ovMove(0);
+    else if (k === 'g') return void (ui.pending = 'g');
+    else if (k === 'j' || k === '\x1b[B') ovMove(1);
+    else if (k === 'k' || k === '\x1b[A') ovMove(-1);
+    else if (k === '\x04' || k === '\x1b[6~') ovMove(half);
+    else if (k === '\x15' || k === '\x1b[5~') ovMove(-half);
+    else if (k === 'G') (ui.ov.cur = ui.ov.rows.length - 1), ovMove(-1), ovMove(1);
+    else if (k === 'l' || k === '\t' || k === '\x1b[C') ovTab(TABS[(i + 1) % TABS.length].id);
+    else if (k === 'h' || k === '\x1b[Z' || k === '\x1b[D') ovTab(TABS[(i + TABS.length - 1) % TABS.length].id);
+    else if (/^[1-9]$/.test(k) && TABS[Number(k) - 1]) ovTab(TABS[Number(k) - 1].id);
+    else if (k === '\r') return void (ovEnter(), draw());
+    else if (k === 'm' || k === '\x1b') (ui.lastTab = ui.ov.tab), (ui.ov = null);
+    else if (k === 'q') return quit();
+    else if (k === '?') ui.help = true;
+    draw();
   }
 
   /** Scroll so the rows matching pred show, as far as they fit, keeping the cursor on screen. */
@@ -557,6 +673,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
       if (k === 'r') return void reload();
       return;
     }
+    if (ui.ov) return ovKey(k);
     const half = Math.max(1, Math.floor((H() - 3) / 2));
     const p = ui.pending;
     ui.pending = '';
@@ -582,6 +699,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     } else if (k === 'v' || k === 'V') return mark(k === 'V');
     else if (k === ' ') toggleFold();
     else if (k === 'z') toggleFold('outer');
+    else if (k === 'm') openOverview();
     else if (k === '\t') {
       if (!ui.ann?.groups.length) return flash(ui.annError ? `annotations: ${ui.annError}` : `no groups: the agent writes them to ${annotationsPath(ui.ws.root)}`, 'yellow');
       return switchLens();
@@ -629,6 +747,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
   }
   const onResize = () => {
     relayout();
+    if (ui.ov) ovLayout();
     draw();
   };
   out.on('resize', onResize);

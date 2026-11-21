@@ -55,6 +55,7 @@ fr ~/work/idempotent-refunds --print | less -R
 | `v` | mark the hunk reviewed and go on to the next one (on a file line: the file) |
 | `V` | the whole file reviewed (again: not reviewed) |
 | `tab` | lens: the agent's groups, or the services |
+| `m` | the overview: design, names, contracts, rollout |
 | `]]` `[[` · `]h` `[h` · `]g` `[g` · `]c` `[c` | file (or part) · hunk · group (or service) · comment |
 | `space` `z` `Z` | fold the hunk · the file or group · all of them |
 | `c` · `e` · `x` | comment on the line (on a file line: the file) · edit · delete |
@@ -89,6 +90,17 @@ Under a hunk, in either lens: the **unchanged callers** that depend on it (statu
 broken, unclear or ok, with their code), and **test intents** under a test's hunk (the
 behaviour it specifies, what it really asserts, flags such as a loosened assertion with
 the old line). Text in the annotations is Markdown.
+
+`m` opens the **overview**, the map of the change beyond its hunks, one tab each:
+**Design** (types and responsibilities, new dependencies, signals, how the codebase does
+it, the agent's opinion labelled as such), **Names** (flagged ones first, beside what the
+codebase calls the same thing), **Contracts** (backward compatible or not, the fields
+side by side, consumers changed or not) and **Rollout** (the deploy order, what breaks
+while only some services are deployed, configuration). `h`/`l` or `1`-`4` switch tabs;
+`⏎` on a citation of the change goes to that code in the review, on other code (an
+unchanged consumer, another checkout) shows it in place; `m` goes back. Facts the tool
+checks itself are marked **FR NOTICED**, apart from the agent's words.
+`fr --print --overview` prints it.
 
 ## Development
 

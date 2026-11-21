@@ -9,8 +9,9 @@ worktree). The changes are at the centre, as in a diff view; an agent's annotati
 **Read `docs/discovery.md` first.** It holds the problem, the decisions, the rejected
 approaches and the open questions (§13a; §13 records what is decided). The first
 version (§12) is built step by step; step 1, the viewer (`fr`, see README.md), is done.
-Step 2, the annotation file, is specified in `docs/annotations.md`; groups, `fr hunks`
-and `fr check` are built, the rest of its views are next (see the status there).
+Step 2, the annotation file (`docs/annotations.md`), is built: `fr hunks`, `fr check`,
+the groups lens, ghosts and test intents in place, the overview (`m`). Next is step 3,
+the cheap objective signals (discovery §12).
 
 `npm test` runs the tests; `node test/fixture.mjs <dir>` builds a sample feature.
 

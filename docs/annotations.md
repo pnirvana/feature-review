@@ -7,8 +7,8 @@ written there.
 Status (2026-11-21): **settled** (the answers are at the end). Built: `fr hunks`,
 `fr check [--stamp]`, groups in the viewer (the groups lens), ghosts and test notes in
 place (under their hunk, in both lenses; a folded hunk, file or group counts them; notes
-on no hunk go to "Other notes"). Next: design, names, contracts and rollout as views of
-their own. Those sections are already checked by `fr check`.
+on no hunk go to "Other notes"), and the overview (`m`): design, names, contracts and
+rollout, one tab each, every citation a jump to its code. Step 2 is complete.
 
 ## Principles
 

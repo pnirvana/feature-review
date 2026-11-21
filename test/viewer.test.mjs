@@ -138,6 +138,31 @@ test('vi mode in the comment field: esc to normal mode, vi edits, ⏎ saves', as
   assert.deepEqual(readState(dir).comments.map((c) => c.text), ['How a record here?']);
 });
 
+test('m opens the overview; ⏎ on a citation of the change goes to that code; m goes back', async () => {
+  const { term } = await viewer();
+  await term.type('m');
+  assert.match(term.screen()[0], /1 Design 2 +2 Names 3 +3 Contracts 1 +4 Rollout 1/);
+  assert.match(term.cursor().text, /RefundService +CHANGED/);
+  await term.type('3', 'j'); // contracts: the producer
+  assert.match(term.cursor().text, /producer gateway\/.*RefundRequest\.java:1-3/);
+  await term.type('\r');
+  assert.match(term.screen()[0], /reviewed 0\/9 +groups/); // back in the review
+  assert.match(term.where(), /gateway\/src\/main\/java\/shop\/gateway\/RefundRequest\.java:\+1/);
+  await term.type('m'); // the overview opens where it was left
+  assert.match(term.cursor().text, /POST \/refunds|producer/);
+  await term.type('m');
+  assert.match(term.screen()[0], /reviewed/);
+});
+
+test('in the overview, ⏎ on code outside the change shows it in place', async () => {
+  const { term } = await viewer({ rows: 30 });
+  await term.type('m', '3', 'G', 'k'); // the consumer in another checkout
+  assert.match(term.cursor().text, /refund-service-seed\/.*RefundService\.java:4 +outside the feature/);
+  await term.type('\r');
+  assert.ok(term.screen().some((l) => /4 +public void refund\(String orderId, long amount\) \{/.test(l)));
+  assert.match(term.screen()[0], /Contracts/); // still in the overview
+});
+
 test('the viewer picks up annotations the agent rewrites', async () => {
   const { term } = await viewer();
   const a = sampleAnnotations();

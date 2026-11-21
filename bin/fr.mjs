@@ -10,6 +10,7 @@ import { annotationsPath, readAnnotations, checkAnnotations, unitIds, hunkRange,
 import { fit, plain } from '../src/md/term.mjs';
 import { loadConfig, initConfig, SETTINGS } from '../src/config.mjs';
 import { configureTheme } from '../src/ui/theme.mjs';
+import { overviewRows, TABS } from '../src/overview.mjs';
 
 const USAGE = `usage: fr [dir] [options]          the viewer (or --print)
        fr hunks [dir] [--json]      the hunks with their ids, for citing them
@@ -31,6 +32,7 @@ state of the code the annotations fit, so the viewer can tell when they are stal
 
 options:
   --print           print the review instead of opening the viewer
+  --overview        with --print: the overview instead (design, names, contracts, rollout)
   --plain           with --print: no colours
   --width N         with --print: the width (default: the terminal's, or 120)
   --layout L        auto | split | unified (default auto: split from 110 columns)
@@ -48,6 +50,7 @@ try {
     allowPositionals: true,
     options: {
       print: { type: 'boolean' },
+      overview: { type: 'boolean' },
       plain: { type: 'boolean' },
       width: { type: 'string' },
       layout: { type: 'string' },
@@ -170,6 +173,16 @@ async function view() {
     if (error) console.error(`fr: ${error}`);
     const checked = ann ? await checkAnnotations(ann, ws) : null;
     const hl = await highlightFiles(ws, o.plain ? 'none' : set['viewer.highlight']);
+    if (o.overview) {
+      if (!ann) throw new Error(`no annotations: ${annotationsPath(ws.root)}`);
+      const out = [];
+      for (const t of TABS) {
+        out.push(`${o.plain ? '' : '\x1b[1m'}${t.title}${o.plain ? '' : '\x1b[0m'}`, '');
+        for (const r of overviewRows({ ann, ...checked }, t.id, { width })) out.push(o.plain ? plain(r.segs).trimEnd() : fit(r.segs, width));
+        out.push('', '');
+      }
+      return void process.stdout.write(out.join('\n').trimEnd() + '\n');
+    }
     const lens = lensWanted ?? (checked?.groups.length ? 'groups' : 'services');
     const rows = buildRows(ws, st, { width, layout: set['viewer.layout'], hl, tint: !o.plain, lens, ann: checked && { ann, ...checked } });
     process.stdout.write(rows.map((r) => (o.plain ? plain(r.segs).trimEnd() : fit(r.segs, width))).join('\n') + '\n');

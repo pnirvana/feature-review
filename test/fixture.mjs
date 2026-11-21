@@ -171,6 +171,50 @@ export function sampleAnnotations() {
         found_by: "grep 'refund(' in all repositories",
       },
     ],
+    design: [
+      {
+        type: 'RefundService',
+        ref: { repo: 'refund-service', file: RS, lines: '3-9' },
+        change: 'changed',
+        layer: 'domain',
+        responsibility: 'Books a refund and remembers its idempotency key.',
+        dependencies_added: [{ to: 'Set<String> seen', layer: 'infrastructure', ref: { repo: 'refund-service', file: RS, lines: '5' } }],
+        signals: [{ kind: 'primitive-concept', refs: [{ repo: 'refund-service', file: RS, lines: '4' }], note: 'the idempotency key is a bare `String`' }],
+        precedent: [{ ref: { path: '../remotes/refund-service-seed', file: 'src/main/java/shop/refund/Util.java', lines: '3-5' }, note: 'the existing helpers are static, without state' }],
+        opinion: 'An `IdempotencyKey` value object would make the rule explicit.',
+      },
+      {
+        type: 'RefundRequest',
+        ref: { hunk: 'gateway:H3' },
+        change: 'new',
+        layer: 'interface',
+        responsibility: 'Carries a refund request into the gateway.',
+      },
+    ],
+    names: [
+      { name: 'seen', kind: 'field', ref: { repo: 'refund-service', file: RS, lines: '5' }, flag: 'technical', codebase: [{ name: 'processedRefunds', ref: { path: '../remotes/refund-service-seed', file: 'src/main/java/shop/refund/Legacy.java', lines: '4' } }], note: 'says how, not what' },
+      { name: 'idempotencyKey', kind: 'field', ref: { hunk: 'gateway:H3' }, flag: 'inconsistent-across-services', note: 'refund-service calls it `key`' },
+      { name: 'RefundRequest', kind: 'type', ref: { hunk: 'gateway:H3' }, flag: 'ok' },
+    ],
+    contracts: [
+      {
+        name: 'POST /refunds',
+        kind: 'http',
+        producer: { ref: { hunk: 'gateway:H3' } },
+        consumers: [
+          { ref: { repo: 'refund-service', file: RS, lines: '4' }, changed: true, status: 'ok' },
+          { ref: { path: '../remotes/refund-service-seed', file: RS, lines: '4' }, changed: false, status: 'broken', note: 'still takes no key' },
+        ],
+        fields: [{ name: 'idempotencyKey', producer: 'String, required', consumer: 'absent in old clients', note: 'old clients send no key' }],
+        compatible: 'no',
+      },
+    ],
+    rollout: {
+      order: ['refund-service', 'gateway'],
+      why: 'The gateway sends the key; **refund-service** must accept it first.',
+      partial: [{ deployed: ['gateway'], not: ['refund-service'], effect: 'refunds fail: the service does not take a key', risk: 'high' }],
+      config: [{ ref: { repo: 'refund-service', file: 'helm/values.yaml', lines: '1' }, note: 'replicaCount 2 → 3: the in-memory key set is **per replica**' }],
+    },
   };
 }
 
