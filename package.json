@@ -1,0 +1,16 @@
+{
+  "name": "feature-review",
+  "version": "0.1.0",
+  "description": "Review a large, agent-written change across the worktrees of a feature",
+  "type": "module",
+  "bin": {
+    "fr": "bin/fr.mjs"
+  },
+  "engines": {
+    "node": ">=25"
+  },
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "private": true
+}
