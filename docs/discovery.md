@@ -256,8 +256,9 @@ Built in this order, each step usable on its own:
    folded like reviewed hunks; tests paired with their code by name, with "its test not
    changed", "no test found" and "existing test changed with its code"; assertion
    heuristics (`src/asserts.mjs`: removed, loosened, expected value changed, disabled,
-   catch-all, longer timeout, a new test that asserts nothing). Still to do: JaCoCo
-   coverage of the changed lines.
+   catch-all, longer timeout, a new test that asserts nothing); JaCoCo coverage of the
+   added lines (`src/coverage.mjs`: reports found or configured, merged, not trusted when
+   older than the file). Step 3 is complete.
 
    **Decided while building (2026-11-21): findings sit in the diff.** The reader looks at
    a change and is made aware there of everything smelly about it. fr's line signals,

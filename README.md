@@ -86,6 +86,18 @@ comments magenta), not the kind of fact. Only git is needed.
   - `ASSERTS NOTHING` or `ONLY CHECKS NOTHING IS THROWN` on a new test, with its name, to
     hold against what it claims.
 
+- **Coverage of the changed lines**, from the JaCoCo reports a build left in the
+  worktrees (Maven `target/site/*/jacoco.xml`, Gradle `build/reports/jacoco/*/*.xml`, in
+  any module; or `[coverage] <worktree> = ["path/to/jacoco.xml"]` in
+  `<dir>/feature-review.toml`). Each added line gets a dot right after its number: `●`
+  a test runs it, `◐` some branches are not taken, `○` no test runs it (a shape apart
+  from the bars `▌` of findings in the gutter). Each hunk says `NOT COVERED 2 of 8
+  changed lines`, `BRANCHES NOT TAKEN` or `COVERED`. Under each line with a branch no
+  test takes: `1 OF 2 BRANCHES NOT TAKEN` (JaCoCo counts them, it does not say which:
+  for an `if`, the tests always found the condition true, or always false). Several reports are merged. A report
+  older than a file marks nothing in it (`COVERAGE OUT OF DATE`: its line numbers may
+  have moved). The service's heading says how old the reports are, or that there is none.
+
 `fr hunks` lists the signals too (`mechanical: true` in `--json`), so the agent need not
 explain what fr has verified.
 
@@ -101,11 +113,12 @@ explain what fr has verified.
 | `]]` `[[` · `]h` `[h` · `]g` `[g` · `]c` `[c` | file (or part) · hunk · group (or service) · comment |
 | `gt` | from code to its test in the change, or back (`⏎` on a `TESTS` line: that file) |
 | `⏎` | on an unchanged caller in the diff: show its code, or hide it |
+| `f` | show or hide kinds of markers, notes and marks: `1` agent · `2` fr · `3` coverage · `4` comments · `0` all (`f` `1` `2` `4`: coverage alone) |
 | `a` | hide the annotations in and around the code: findings in the diff, fr's notes, test intents (their gutter marks stay; the intent, the groups' reasons and your comments stay); again: show them |
 | `space` `z` `Z` | fold the hunk · the file or group · all of them |
 | `c` · `e` · `x` | comment on the line (on a file line: the file) · edit · delete |
 | `o` | open the line in `$EDITOR` |
-| `s` · `r` · `/` · `?` · `q` | side by side ↔ inline · reload · search · help · quit |
+| `s` · `r` · `/` · `?` · `q` | side by side ↔ inline · reload · search as you type (⏎ keeps the match, esc goes back) · help · quit |
 
 Reviewed hunks and files fold away. A mark is keyed by the hunk's repository, file and
 changed lines, so it survives a rebase and resets when the hunk changes. A comment

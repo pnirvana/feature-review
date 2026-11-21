@@ -7,6 +7,7 @@
 // agent's unchanged callers (anchored at the change they depend on), test flags and
 // findings that cite changed lines. What cites no changed line stays a note, as before.
 import { hunkRange } from './annotations.mjs';
+import { signalLayer } from './signals.mjs';
 
 const human = (kind) => String(kind ?? '').replace(/[-_]/g, ' ').toUpperCase();
 const CALLER = { broken: 'BREAKS A CALLER', unclear: 'CALLER TO CHECK', ok: 'CALLER STILL FINE' };
@@ -28,7 +29,7 @@ export function collectCallouts(ws, ann) {
   for (const [u, list] of ws.signals?.units ?? [])
     for (const s of list)
       if (s.at && hunkOf.has(u))
-        add(u, { key: `fr:${u}:${s.kind}:${s.at.side}${s.at.line}`, source: 'fr', level: s.level === 'info' ? 'info' : 'warn', label: s.label, text: s.text, md: false, side: s.at.side, from: s.at.line, to: s.at.line });
+        add(u, { key: `fr:${u}:${s.kind}:${s.at.side}${s.at.line}`, source: 'fr', layer: signalLayer(s), level: s.level === 'info' ? 'info' : 'warn', label: s.label, text: s.text, md: false, side: s.at.side, from: s.at.line, to: s.at.line });
 
   if (!ann?.ann) return { byUnit, inlined };
   const res = (ref) => ann.refs?.get(ref) ?? null;

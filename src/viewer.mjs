@@ -6,7 +6,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadWorkspace } from './workspace.mjs';
 import { readState, update, setMarks, addComment, editComment, deleteComment } from './state.mjs';
-import { buildRows, highlightFiles, fid, unitsOf, readingOrder, groupFoldId, UNGROUPED } from './rows.mjs';
+import { buildRows, highlightFiles, fid, unitsOf, readingOrder, groupFoldId, UNGROUPED, LAYERS } from './rows.mjs';
+
+const LAYER_NAMES = { agent: 'agent', fr: 'fr', coverage: 'coverage', comments: 'comments' };
 import { annotationsPath, readAnnotations, checkAnnotations } from './annotations.mjs';
 import { queryColors, applyTheme } from './ui/theme.mjs';
 import { overviewRows, tabBar, TABS } from './overview.mjs';
@@ -32,10 +34,11 @@ const HELP = [
   'e x             on a comment: edit it / delete it (x twice)',
   'o               open the line in $EDITOR',
   's               side by side ↔ inline',
+  'f               show or hide kinds of markers, notes and marks: 1 agent  2 fr  3 coverage  4 comments  0 all',
   'a               hide the annotations in and around the code (findings, fr\'s notes, test intents; their',
   '                gutter marks stay); the intent and the groups\' reasons stay. Again: show them',
   'r               reload (the worktrees and the review state; annotations reload by themselves)',
-  '/  n N  esc     search, next / previous match, end the search',
+  '/  n N  esc     search as you type (⏎ keeps the match, esc goes back), next / previous match, end it',
   'q               quit',
   '',
   'Reviewed hunks and files fold away; a mark resets when the hunk changes.',
@@ -73,6 +76,8 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     highlighting: false,
     ov: null, // the overview when open: {tab, rows, cur, top, expanded}
     quiet: false, // annotations hidden (a): the code alone
+    show: { agent: true, fr: true, coverage: true, comments: true }, // the kinds of markers shown (f)
+    layers: null, // the f menu, when open: {cur, top} kept
   };
 
   const W = () => out.columns || 100;
@@ -87,7 +92,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
   const lensNow = () => (ui.ann?.groups.length ? (ui.lens ?? 'groups') : 'services');
   /** The layout on screen: auto is split when the code is 110 columns wide (codeView), else unified. */
   const shownLayout = () => (ui.layout !== 'auto' ? ui.layout : opts().width - (lensNow() === 'groups' ? 2 : 0) >= 110 ? 'split' : 'unified');
-  const opts = () => ({ width: Math.max(30, W() - 2), layout: ui.layout, fold: ui.fold, hl: ui.hl, lens: lensNow(), ann: ui.ann, quiet: ui.quiet });
+  const opts = () => ({ width: Math.max(30, W() - 2), layout: ui.layout, fold: ui.fold, hl: ui.hl, lens: lensNow(), ann: ui.ann, quiet: ui.quiet, show: ui.show });
   function relayout(keep = rowKey(ui.rows[ui.cur])) {
     if (!ui.ws) return;
     ui.rows = buildRows(ui.ws, ui.st, opts());
@@ -204,6 +209,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
       [` reviewed ${done}/${all.length}`, all.length && done === all.length ? 'green bold' : ''],
       ...(ui.st.comments.length ? [[`  ${ui.st.comments.length} comment${ui.st.comments.length === 1 ? '' : 's'}`, 'magenta']] : []),
       ...(ui.quiet ? [['  annotations hidden', 'yellow']] : []),
+      ...(LAYERS.some((k) => !ui.show[k]) ? [[`  only ${LAYERS.filter((k) => ui.show[k]).map((k) => LAYER_NAMES[k]).join(', ') || 'the code'}`, 'yellow']] : []),
       [`  ${lensNow()} · ${shownLayout() === 'split' ? 'side by side' : 'inline'}${ui.layout === 'auto' ? ' (auto)' : ''}`, 'dim'],
       ...(ui.annError ? [['  annotations unreadable', 'red']] : ui.ann?.errors.length ? [[`  annotations: ${ui.ann.errors.length} error${ui.ann.errors.length === 1 ? '' : 's'}`, 'red']] : []),
       ...(ui.loading ? [['  reading…', 'dim']] : ui.highlighting ? [['  highlighting…', 'dim']] : []),
@@ -216,7 +222,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     const l = r.line && typeof r.line === 'object' ? `:${r.line.side === 'old' ? '-' : '+'}${r.line.n}` : '';
     return `${x.repo.name}/${x.f.file}${l}`;
   }
-  const KEYS = 'tab lens  m overview  a annotations  j/k move  ]] file  ]u not reviewed  v reviewed  space fold  c comment  o editor  s layout  / search  ? help  q quit';
+  const KEYS = 'tab lens  m overview  a annotations  f markers  j/k move  ]] file  ]u not reviewed  v reviewed  space fold  c comment  o editor  s layout  / search  ? help  q quit';
   const OV_KEYS = 'h/l or 1-4 tab  j/k move  ⏎ to the code  m/esc back to the review  q quit';
   function footer() {
     const w = W();
@@ -231,6 +237,10 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
         [[' ' + ui.input.label, 'bold yellow'], ...viMode, [mode ? '   esc normal mode · ⏎ there sends' : '   ⏎ save · alt+⏎ new line · esc cancel', 'dim']],
         ...rows.map((segs, i) => [[(i === 0 && above) || (i === rows.length - 1 && below) ? ' ⋮ ' : ' │ ', 'gray'], ...segs]),
       ];
+    }
+    if (ui.layers) {
+      const item = (k, i) => [[`  ${i + 1} `, 'bold'], [LAYER_NAMES[k], ui.show[k] ? '' : 'dim'], [ui.show[k] ? ' ✓' : ' ·', ui.show[k] ? 'green' : 'dim']];
+      return [[[' show:', 'bold yellow'], ...LAYERS.flatMap(item), ['     0 all · f / esc done', 'dim']], [[' ', ''], ['each number shows or hides that kind of marker: its notes and its marks', 'gray']]];
     }
     if (ui.ov) {
       const msg = ui.flash && ui.flash.until > Date.now() ? [[' ' + ui.flash.msg, ui.flash.style]] : [[' ' + OV_KEYS, 'dim']];
@@ -630,6 +640,17 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     flash(`${to.length > 1 ? `${to.indexOf(target) + 1}/${to.length} ` : ''}${f.file}   gt: back`, 'dim');
   }
 
+  /** In the f menu: 1-4 show or hide a kind of marker, 0 all, f / esc / ⏎ done. */
+  function layersKey(k) {
+    const i = Number(k);
+    if (k === '0') for (const x of LAYERS) ui.show[x] = true;
+    else if (i >= 1 && i <= LAYERS.length) ui.show[LAYERS[i - 1]] = !ui.show[LAYERS[i - 1]];
+    else if (k === 'f' || k === '\x1b' || k === '\r' || k === 'q') ui.layers = null;
+    else return;
+    // like a: the top line stays, the cursor stays on its line
+    relayoutKeeping();
+  }
+
   /**
    * a: hide the annotations, or show them again. The line at the top of the screen stays,
    * what is below closes up or opens out, as a fold does; the cursor stays on its line (on
@@ -641,39 +662,42 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     const from = { cur: ui.cur, top: ui.top };
     const back = ui.quietBack;
     ui.quiet = !ui.quiet;
-    relayout(null);
+    relayoutKeeping();
     if (!ui.quiet && back && rowKey(old[from.cur]) === back.landed && ui.rows.length === back.n) {
       ui.cur = back.cur;
       ui.top = back.top;
-    } else {
-      // rows by key and occurrence (the lines of one note share a key): old row → new index
-      const occ = (rows) => {
-        const n = new Map();
-        return rows.map((r) => {
-          const k = rowKey(r);
-          n.set(k, (n.get(k) ?? 0) + 1);
-          return `${k}#${n.get(k)}`;
-        });
-      };
-      const at = new Map(occ(ui.rows).map((k, i) => [k, i]));
-      const oldKeys = occ(old);
-      const same = (j) => (nonEmpty(old[j]) ? (at.get(oldKeys[j]) ?? -1) : -1);
-      // the row of old that stays, from j down (else up): its new index
-      const stays = (j0) => {
-        for (let j = j0; j < old.length; j++) if (same(j) >= 0) return same(j);
-        for (let j = j0 - 1; j >= 0; j--) if (same(j) >= 0) return same(j);
-        return 0;
-      };
-      // the line at the top of the screen stays there, the rest closes up (or opens out)
-      // below it, as a fold does; the cursor moves with its line, in view
-      ui.cur = stays(from.cur);
-      ui.top = from.top === 0 ? 0 : stays(from.top);
-      const bodyH = Math.max(1, H() - 3);
-      if (ui.cur < ui.top) ui.top = ui.cur;
-      if (ui.cur >= ui.top + bodyH) ui.top = ui.cur - bodyH + 1;
     }
     ui.quietBack = ui.quiet ? { cur: from.cur, top: from.top, n: old.length, landed: rowKey(ui.rows[ui.cur]) } : null;
     flash(ui.quiet ? 'annotations hidden: a shows them' : 'annotations shown');
+  }
+
+  /** Lay out again with rows gone or back: the top line and the cursor's line stay (as for a). */
+  function relayoutKeeping() {
+    const old = ui.rows;
+    const from = { cur: ui.cur, top: ui.top };
+    relayout(null);
+    const occ = (rows) => {
+      const n = new Map();
+      return rows.map((r) => {
+        const k = rowKey(r);
+        n.set(k, (n.get(k) ?? 0) + 1);
+        return `${k}#${n.get(k)}`;
+      });
+    };
+    const at = new Map(occ(ui.rows).map((k, i) => [k, i]));
+    const oldKeys = occ(old);
+    const same = (j) => (nonEmpty(old[j]) ? (at.get(oldKeys[j]) ?? -1) : -1);
+    const stays = (j0) => {
+      for (let j = j0; j < old.length; j++) if (same(j) >= 0) return same(j);
+      for (let j = j0 - 1; j >= 0; j--) if (same(j) >= 0) return same(j);
+      return 0;
+    };
+    ui.cur = stays(from.cur);
+    ui.top = from.top === 0 ? 0 : stays(from.top);
+    const bodyH = Math.max(1, H() - 3);
+    if (ui.cur < ui.top) ui.top = ui.cur;
+    if (ui.cur >= ui.top + bodyH) ui.top = ui.cur - bodyH + 1;
+    draw();
   }
 
   /** The fid of the file a unit (hunk key, or a hunkless file's key) belongs to. */
@@ -682,8 +706,37 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     return null;
   }
 
-  function ask({ label, multiline = true, value = '', onSubmit }) {
-    ui.input = { label, multiline, onSubmit, field: textField(value, { multiline, vi: viMode }) };
+  /**
+   * /: a live search. Each key shows the matches and goes to the first one from where the
+   * search started (the screen scrolls only when it is out of view); ⏎ keeps it, esc goes
+   * back to where it started.
+   */
+  function startSearch() {
+    const from = { cur: ui.cur, top: ui.top, search: ui.search };
+    const show = (q) => {
+      ui.search = q ? { q, hits: searchHits(q) } : null;
+      const hits = ui.search?.hits ?? [];
+      if (!hits.length) return void ((ui.cur = from.cur), (ui.top = from.top));
+      ui.cur = hits.find((i) => i > from.cur) ?? hits[0];
+      const bodyH = Math.max(1, H() - 3);
+      ui.top = from.top;
+      if (ui.cur < ui.top || ui.cur >= ui.top + bodyH) ui.top = Math.max(0, ui.cur - Math.floor(bodyH / 3));
+    };
+    ask({
+      label: '/',
+      multiline: false,
+      onChange: show,
+      onSubmit: (q) => {
+        show(q);
+        if (q && !ui.search.hits.length) flash(`no match: ${q}`, 'yellow');
+      },
+      onCancel: () => Object.assign(ui, from),
+    });
+  }
+
+  /** A text field in the footer. onChange(text) on every key (a live search), onCancel on esc. */
+  function ask({ label, multiline = true, value = '', onSubmit, onChange = null, onCancel = null }) {
+    ui.input = { label, multiline, onSubmit, onChange, onCancel, field: textField(value, { multiline, vi: viMode }) };
     draw();
   }
   function comment() {
@@ -769,7 +822,11 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
         const inp = ui.input;
         ui.input = null;
         inp.onSubmit(fieldText(inp.field));
-      } else if (res === 'cancel') ui.input = null;
+      } else if (res === 'cancel') {
+        const inp = ui.input;
+        ui.input = null;
+        inp.onCancel?.();
+      } else ui.input.onChange?.(fieldText(ui.input.field));
       return draw();
     }
     if (pasting) return;
@@ -780,6 +837,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
       return;
     }
     if (ui.ov) return ovKey(k);
+    if (ui.layers) return layersKey(k);
     const half = Math.max(1, Math.floor((H() - 3) / 2));
     const p = ui.pending;
     ui.pending = '';
@@ -808,6 +866,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     else if (k === 'z') toggleFold('outer');
     else if (k === 'm') openOverview();
     else if (k === 'a') return toggleQuiet();
+    else if (k === 'f') return void ((ui.layers = {}), draw());
     else if (k === '\r' && ui.rows[ui.cur]?.pair) return jumpToPair(ui.rows[ui.cur].pair);
     else if (k === '\r' && ui.rows[ui.cur]?.expand) {
       // a finding naming code outside the change: show it in place, or hide it again
@@ -833,16 +892,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
       ui.layout = shownLayout() === 'split' ? 'unified' : 'split';
       relayout();
     } else if (k === 'r') return void reload('reloaded');
-    else if (k === '/')
-      return ask({
-        label: '/',
-        multiline: false,
-        onSubmit: (q) => {
-          ui.search = q ? { q, hits: searchHits(q) } : null;
-          if (ui.search?.hits.length) ui.cur = ui.search.hits.find((i) => i >= ui.cur) ?? ui.search.hits[0];
-          draw();
-        },
-      });
+    else if (k === '/') return startSearch();
     else if (k === '\x1b') ui.search = null;
     else if (k === '?') ui.help = true;
     else if (k === 'q') return quit();

@@ -287,7 +287,9 @@ function runs(lines) {
  * n} for a diff: the new side where a row has one, n for code), `at` ({old, new}: the
  * line numbers a diff row shows), `group` and `title`.
  */
-export function codeView({ groups, name = '', width = 100, highlight: mode = 'auto', tint = true, layout = 'unified', signs = false, segsFor = null }) {
+export function codeView({ groups, name = '', width = 100, highlight: mode = 'auto', tint = true, layout = 'unified', signs = false, segsFor = null, mark = null }) {
+  // mark(line) → [char, style] | null: a mark right after a new line's number (coverage)
+  const markOf = (l) => (mark && l && l.t !== '-' && mark(l)) || null;
   const isDiff = groups.some((g) => g.lines.some((l) => l.old !== undefined || l.new !== undefined) && !g.lines.some((l) => l.n !== undefined));
   const nums = groups.flatMap((g) => g.lines.flatMap((l) => [l.old, l.new, l.n])).filter((x) => x != null);
   const nw = Math.max(3, String(Math.max(0, ...nums)).length);
@@ -358,7 +360,7 @@ export function codeView({ groups, name = '', width = 100, highlight: mode = 'au
     if (!split) {
       for (const l of g.lines) {
         const bg = bgOf(l);
-        const gutter = [[`${l.old ?? ''}`.padStart(nw) + ' ' + `${l.new ?? ''}`.padStart(nw) + ' ', 'gray'], ...(signs ? [[l.t === ' ' ? '  ' : l.t + ' ', l.t === '+' ? 'addfg bold' : l.t === '-' ? 'delfg bold' : '']] : [[' ', bg]])];
+        const gutter = [[`${l.old ?? ''}`.padStart(nw) + ' ' + `${l.new ?? ''}`.padStart(nw), 'gray'], markOf(l) ?? [' ', ''], ...(signs ? [[l.t === ' ' ? '  ' : l.t + ' ', l.t === '+' ? 'addfg bold' : l.t === '-' ? 'delfg bold' : '']] : [[' ', bg]])];
         const gw = segsWidth(gutter);
         hardWrap(styled.get(l), Math.max(8, width - gw)).forEach((r, y) => {
           const g2 = y ? [[' '.repeat(gw - 2), ''], ['┆', 'gray'], [' ', bg]] : gutter;
@@ -371,10 +373,11 @@ export function codeView({ groups, name = '', width = 100, highlight: mode = 'au
     // side by side: old | new, a change's removals beside its additions, ╱ where a side has none
     const half = Math.floor((width - 1) / 2);
     const codeW = Math.max(4, half - nw - 2);
-    const side = (l, n) => {
+    const side = (l, n, isNew = false) => {
       if (!l) return [[['╱'.repeat(half), 'filler']]];
       const bg = bgOf(l);
-      return hardWrap(styled.get(l), codeW).map((r, y) => pad([[y ? ' '.repeat(nw - 1) + '┆' : String(n).padStart(nw), 'gray'], [' ', bg], ...r], half, bg));
+      const m = isNew ? markOf(l) : null;
+      return hardWrap(styled.get(l), codeW).map((r, y) => pad([[y ? ' '.repeat(nw - 1) + '┆' : String(n).padStart(nw), 'gray'], (!y && m) || [' ', bg], ...r], half, bg));
     };
     const pairs = [];
     for (const run of runs(g.lines)) {
@@ -383,7 +386,7 @@ export function codeView({ groups, name = '', width = 100, highlight: mode = 'au
     }
     for (const [o, n] of pairs) {
       const L = side(o, o?.old);
-      const R = side(n, n?.new);
+      const R = side(n, n?.new, true);
       const h = Math.max(L.length, R.length);
       const anchor = n ?? o;
       for (let y = 0; y < h; y++) {

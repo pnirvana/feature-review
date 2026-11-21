@@ -16,6 +16,7 @@ import { pad, plain, restyle, untab, wrapSegs } from './md/term.mjs';
 import { fileTexts } from './workspace.mjs';
 import { locate } from './state.mjs';
 import { collectCallouts } from './inline.mjs';
+import { signalLayer } from './signals.mjs';
 import './ui/theme.mjs'; // the theme's named styles, the fallback until the viewer asks the terminal
 
 export const fid = (f) => `${f.repo}\0${f.file}`;
@@ -157,16 +158,25 @@ function mdRows(text, width, base, { extra = '' } = {}) {
   return rows;
 }
 
+/** The kinds of markers the reader can show or hide (f): their notes and their marks. */
+export const LAYERS = ['agent', 'fr', 'coverage', 'comments'];
+
 /** What every lens needs: the options, marks, located comments, highlighting. */
 function context(ws, st, opts) {
+  const show = { agent: true, fr: true, coverage: true, comments: true, ...opts.show };
   const marked = (k) => Boolean(st.marks[k]);
-  const comments = st.comments.map((c) => ({ c, loc: locate(c, ws) }));
-  const sig = ws.signals ?? { units: new Map(), files: new Map(), mechanical: new Set() };
+  const comments = show.comments ? st.comments.map((c) => ({ c, loc: locate(c, ws) })) : [];
+  const all = ws.signals ?? { units: new Map(), files: new Map(), mechanical: new Set() };
+  // the layers hidden (f) are left out here, so nothing below draws them, notes or marks
+  const keep = (m) => new Map([...m].map(([k, list]) => [k, list.filter((s) => show[signalLayer(s)])]));
+  const sig = { ...all, units: keep(all.units), files: keep(all.files), coverage: show.coverage ? all.coverage : null };
   // verified mechanical units fold like reviewed ones: a glance, until marked
-  const settled = (k) => marked(k) || sig.mechanical.has(k);
+  const settled = (k) => marked(k) || all.mechanical.has(k);
   // what fr and the agent say about particular changed lines: shown under them, in the diff
-  const { byUnit: callouts, inlined } = collectCallouts(ws, opts.ann);
-  return { ws, st, ...opts, marked, settled, sig, comments, callouts, inlined, shown: new Set(), notes: notesByUnit(opts.ann, inlined), placed: new Set() };
+  const { byUnit, inlined } = collectCallouts(ws, opts.ann);
+  const callouts = new Map([...byUnit].map(([u, list]) => [u, list.filter((c) => show[c.source === 'agent' ? 'agent' : c.layer])]));
+  const notes = show.agent ? notesByUnit(opts.ann, inlined) : new Map();
+  return { ws, st, ...opts, show, marked, settled, sig, comments, callouts, inlined, shown: new Set(), notes, placed: new Set() };
 }
 
 /**
@@ -292,7 +302,10 @@ const covers = (row, side, from, to) => {
   return n != null && n >= from && n <= to;
 };
 const MARK = { agent: 'markagent', fr: 'markfr', comment: 'markcomment' };
-const GUTTER_MARK = 2; // the column for the marks, and a space
+// the coverage of an added line (JaCoCo): a test runs it, some branches not, none
+// dots, right after the line's number: a shape of their own, apart from the bars of findings
+const COVER = { covered: ['●', 'addfg'], partly: ['◐', 'yellow'], missed: ['○', 'delfg bold'] };
+const GUTTER_MARK = 2; // the column for the marks of findings, and a space
 
 /**
  * A callout: a finding of fr or the agent, under the line it is about. One row with the
@@ -308,8 +321,16 @@ function calloutRows(ctx, c, base, indent) {
   const meta = { kind: 'note', ...base, callout: c.key, ...(c.expand ? { expand: `x:${c.key}` } : {}) };
   const pre = [[' '.repeat(indent), ''], ['┃ ', bar]];
   const head = [[` ${c.label} `, badge]];
-  if (c.ref) head.push(['  ', ''], [refText(c.ref, c.refRaw), c.ref.ok ? 'bold' : 'red bold']);
   if (c.expand) head.push([open ? '   ⏎ hide the code' : '   ⏎ show the code', 'dim']);
+  // the code it names: beside the badge when it fits, else on a row of its own (shortened)
+  const refRow = [];
+  if (c.ref) {
+    const t = refText(c.ref, c.refRaw);
+    const seg = [t, c.ref.ok ? 'bold' : 'red bold'];
+    const headW0 = head.reduce((n, [x]) => n + x.length, 0);
+    if (headW0 + 2 + t.length <= w) head.splice(1, 0, ['  ', ''], seg);
+    else refRow.push([t.length > w ? `…${t.slice(t.length - w + 1)}` : t, seg[1]]);
+  }
   const tone = c.level === 'warn' ? 'yellow' : 'dim';
   let body = [];
   const headW = head.reduce((n, [t]) => n + t.length, 0);
@@ -319,6 +340,7 @@ function calloutRows(ctx, c, base, indent) {
   }
   if (c.text) body = mdRows(c.text, w, base);
   const rows = [{ ...meta, segs: [...pre, ...head] }];
+  if (refRow.length) rows.push({ ...meta, segs: [...pre, ...refRow] });
   // a one-line text fits beside the badge
   if (body.length === 1 && !c.ref && headW + 2 + plain(body[0].segs).length <= w) rows[0].segs.push(['  ', ''], ...body[0].segs);
   else for (const r of body) rows.push({ ...meta, segs: [...pre, ...r.segs] });
@@ -369,9 +391,16 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
   if (intents.length) rows.push(...intents.slice(whole.length ? 1 : 0), spacer(nb));
 
   const lines = h.lines.map(([t, s, o, n]) => ({ t, s, old: o, new: n, hunk: h.key }));
-  const code = codeView({ groups: [{ lines }], name: f.file, width: width - GUTTER_MARK, layout: f.status === 'A' || f.status === 'D' ? 'unified' : layout, tint, signs: !tint, segsFor: segsForFile(ctx, f) }).map((x) => ({ ...x, ...base, kind: 'code' }));
+  // coverage (JaCoCo) of an added line: right after its number, apart from the marks of findings
+  const cov = ctx.sig.coverage?.get(fid(f));
+  const cover = cov && !cov.stale ? (l) => (l.t === '+' && COVER[cov.lines.get(l.new)]) || null : null;
+  const code = codeView({ groups: [{ lines }], name: f.file, width: width - GUTTER_MARK, layout: f.status === 'A' || f.status === 'D' ? 'unified' : layout, tint, signs: !tint, segsFor: segsForFile(ctx, f), mark: cover }).map((x) => ({ ...x, ...base, kind: 'code' }));
   const nw = Math.max(3, String(Math.max(0, ...h.lines.flatMap(([, , o, n]) => [o ?? 0, n ?? 0]))).length);
   const indent = GUTTER_MARK + nw + 1;
+  // side by side, a finding about a new line goes under the new side, beside its line
+  const split = code.some((row) => row.segs.some(([t, st]) => t === '│' && st === 'gray'));
+  const half = Math.floor((width - GUTTER_MARK - 1) / 2);
+  const indentOf = (c) => (split && c.side === 'new' ? GUTTER_MARK + half + 1 + nw + 1 : indent);
   // findings and comments go below the last row of their line
   const after = new Map();
   const put = (at, item) => after.set(at, [...(after.get(at) ?? []), item]);
@@ -385,12 +414,12 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
     put(at, { x });
   }
   // annotations hidden (quiet): the gutter marks stay; the reader's own comments too
-  const itemRows = ({ c, x }) => (c ? (ctx.quiet ? [] : calloutRows(ctx, c, nb, indent)) : commentRowsOf(ctx, x, nb));
+  const itemRows = ({ c, x }) => (c ? (ctx.quiet ? [] : calloutRows(ctx, c, nb, indentOf(c))) : commentRowsOf(ctx, x, nb));
   const mark = (row) => {
     const who = callouts.filter((c) => covers(row, c.side, c.from, c.to)).map((c) => c.source);
     if (here.some((x) => covers(row, x.loc.side, x.loc.line, x.loc.line))) who.push('comment');
     const top = ['agent', 'fr', 'comment'].find((k) => who.includes(k));
-    return top ? [['▌', MARK[top]], [' ', '']] : [[' '.repeat(GUTTER_MARK), '']];
+    return [top ? ['▌', MARK[top]] : [' ', ''], [' ', '']];
   };
   for (const it of after.get(-1) ?? []) rows.push(...itemRows(it));
   code.forEach((row, i) => {
@@ -528,6 +557,16 @@ export function filesInReadingOrder(r, sig) {
 }
 const allFiles = (ws) => ws.repos.flatMap((r) => filesInReadingOrder(r, ws.signals));
 
+/** A service's coverage reports, for its heading (only where JVM code changed). */
+function coverageNote(ws, r) {
+  if (!r.files.some((f) => /\.(java|kt|groovy|scala)$/.test(f.file))) return [];
+  const reps = ws.signals?.reports?.get(r.name) ?? [];
+  if (!reps.length) return [['no JaCoCo report: build with it for coverage', 'dim'], ['   ', '']];
+  const newest = Math.max(...reps.map((x) => x.mtime));
+  const h = Math.max(0, Date.now() - newest) / 3600000;
+  return [[`coverage: ${plural(reps.length, 'report')}, ${h < 1 ? `${Math.round(h * 60)}m` : h < 48 ? `${Math.round(h)}h` : `${Math.round(h / 24)}d`} old`, 'dim'], ['   ', '']];
+}
+
 function servicesLens(ctx) {
   const { ws, width, fold, marked } = ctx;
   const rows = [];
@@ -547,6 +586,7 @@ function servicesLens(ctx) {
           ...(r.base ? [[`base ${r.baseRef} ${short(r.base)}${r.baseFrom === 'guess' ? ' (guessed)' : ''}`, 'dim'], ['   ', '']] : []),
           ...(r.error ? [] : [[`${plural(r.files.length, 'file')}  `, ''], [`+${add}`, 'addfg'], [' ', ''], [`−${del}`, 'delfg'], ['   ', '']]),
           ...(r.dirty ? [[`● ${r.dirty} uncommitted`, 'yellow'], ['   ', '']] : []),
+          ...coverageNote(ws, r),
           ...(units.length ? [progress(rd, units.length)] : []),
         ],
         width,
@@ -721,13 +761,14 @@ function groupsLens(ctx) {
  * All rows. opts: width, layout ('auto'|'split'|'unified'), fold (Map id → bool: an
  * explicit fold or unfold; ids are fid, hunk keys, groupFoldId()), hl (highlightFiles()),
  * lens ('services'|'groups'), ann (checkAnnotations() plus {ann}: for the groups lens),
+ * show ({agent, fr, coverage, comments}: false hides that kind of marker, notes and marks),
  * quiet (what sits in and around the code hidden: findings in the diff, fr's blocks, test
  * intents, notes under hunks; their gutter marks stay. The intent, a group's why and a
  * part's note stay: they are above the code, not in it).
  */
-export function buildRows(ws, st, { width = 120, layout = 'auto', fold = new Map(), hl = new Map(), tint = true, lens = 'services', ann = null, quiet = false } = {}) {
+export function buildRows(ws, st, { width = 120, layout = 'auto', fold = new Map(), hl = new Map(), tint = true, lens = 'services', ann = null, quiet = false, show = {} } = {}) {
   if (lens === 'groups' && !ann?.groups?.length) lens = 'services';
-  const ctx = context(ws, st, { width, layout, fold, hl, tint, lens, ann, quiet });
+  const ctx = context(ws, st, { width, layout, fold, hl, tint, lens, ann, quiet, show });
   const body = lens === 'groups' ? groupsLens(ctx) : servicesLens(ctx);
   // notes on no hunk, or under a hunk this view does not show: never lost
   const rest = [...ctx.notes].filter(([u]) => !ctx.placed.has(u)).flatMap(([, list]) => list);

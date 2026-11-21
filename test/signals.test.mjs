@@ -76,6 +76,7 @@ before(async () => {
     'src/test/java/a/TaxTest.java': cls('TaxTest', '    void t() { assertEquals(10, new Tax().of(100)); }\n'),
     'app.py': 'def run(a):\n    if a:\n        go()\n    done()\n',
     'src/main/java/a/Zone.java': cls('Zone', '    String id() { return "eu"; }\n'),
+    '.gitignore': 'target/\n',
   });
   sh(wt, 'add', '-A');
   sh(wt, 'commit', '-q', '-m', 'base');
@@ -127,7 +128,7 @@ test('the review shows the signals, and folds verified mechanical hunks', () => 
   const text = rows.map((r) => plain(r.segs)).join('\n');
   assert.match(text, /Orders\.java .*MECHANICAL {2}verified: moved/);
   assert.match(text, /Format\.java .*MECHANICAL {2}verified: whitespace only/);
-  assert.match(text, /EXPECTED VALUE CHANGED +10 → 20, with its code \(Tax\.java\)/);
+  assert.match(text, /EXPECTED VALUE CHANGED[\s┃│]*10 → 20, with its code/);
   assert.doesNotMatch(text, /long sum = 0/); // the moved method is folded away
   assert.match(text, /return x \/ 5/); // the rest is not
 });
@@ -137,6 +138,72 @@ test('a changed test comes right after its code, not in file order', () => {
   const files = rows.filter((r) => r.kind === 'file').map((r) => plain(r.segs).match(/\S+\.(java|py)/)[0].split('/').pop());
   assert.deepEqual(files, ['app.py', 'Billing.java', 'Format.java', 'Orders.java', 'Price.java', 'Tax.java', 'TaxTest.java', 'Zone.java']);
   assert.deepEqual(ws.signals.codeOfTest.get('svc\0src/test/java/a/TaxTest.java'), ['svc\0src/main/java/a/Tax.java']);
+});
+
+// ---------- coverage ----------
+
+import { parseJacoco, findReports } from '../src/coverage.mjs';
+
+const jacoco = (files) =>
+  `<?xml version="1.0" encoding="UTF-8"?><!DOCTYPE report PUBLIC "-//JACOCO//DTD Report 1.1//EN" "report.dtd"><report name="svc"><sessioninfo id="x" start="1" dump="2"/><package name="a">${Object.entries(files)
+    .map(([f, lines]) => `<sourcefile name="${f}">${lines.map(([nr, mi, ci, mb = 0, cb = 0]) => `<line nr="${nr}" mi="${mi}" ci="${ci}" mb="${mb}" cb="${cb}"/>`).join('')}</sourcefile>`)
+    .join('')}</package></report>`;
+
+test('JaCoCo: the report is read per file and line; reports are found in Maven and Gradle builds', () => {
+  const m = parseJacoco(jacoco({ 'Tax.java': [[4, 0, 3]], 'Zone.java': [[4, 0, 2, 1, 1]] }));
+  assert.deepEqual([...m.keys()], ['a/Tax.java', 'a/Zone.java']);
+  assert.deepEqual(m.get('a/Zone.java').get(4), { mi: 0, ci: 2, mb: 1, cb: 1 });
+  const d = fs.mkdtempSync(path.join(os.tmpdir(), 'fr-jacoco-'));
+  write(d, { 'core/target/site/jacoco/jacoco.xml': jacoco({}), 'api/build/reports/jacoco/test/jacocoTestReport.xml': jacoco({}), 'core/src/main/resources/jacoco.xml': '<report/>', 'core/target/site/jacoco/index.html': '' });
+  assert.deepEqual(findReports(d).map((f) => path.relative(d, f)).sort(), ['api/build/reports/jacoco/test/jacocoTestReport.xml', 'core/target/site/jacoco/jacoco.xml']);
+  fs.rmSync(d, { recursive: true, force: true });
+});
+
+test('coverage of the changed lines: marked in the gutter, summed per hunk; an older report is not trusted', async () => {
+  const wt = path.join(top, 'feature', 'svc');
+  const report = path.join(wt, 'target/site/jacoco/jacoco.xml');
+  write(wt, { 'target/site/jacoco/jacoco.xml': jacoco({ 'Tax.java': [[4, 0, 3]], 'Price.java': [[4, 2, 0]], 'Zone.java': [[4, 0, 2, 1, 1]] }) });
+  const later = new Date(Date.now() + 60_000);
+  fs.utimesSync(report, later, later);
+  const w = await loadWorkspace(path.join(top, 'feature'));
+  const kinds = (file) => (w.signals.units.get(w.repos[0].files.find((f) => f.file === file).hunks[0].key) ?? []).map((x) => `${x.kind}: ${x.text}`);
+  assert.deepEqual(kinds('src/main/java/a/Tax.java'), ['covered: a test runs all 1 changed lines']);
+  assert.deepEqual(kinds('src/main/java/a/Price.java'), ['not-covered: 1 of 1 changed lines no test runs']);
+  assert.deepEqual(kinds('src/main/java/a/Zone.java'), ['partly-covered: on 1 of 1 changed lines', 'branch-not-taken: the tests always go the same way here (JaCoCo does not say which)']);
+  const zone = buildRows(w, { marks: {}, comments: [] }, { width: 140, tint: false, lens: 'services' });
+  const callout = zone.findIndex((r) => /1 OF 2 BRANCHES NOT TAKEN/.test(plain(r.segs)));
+  assert.equal(zone[callout - 1].at?.new, 4); // under the line, in the diff
+  // side by side: under the new side, where its line and coverage mark are
+  const divider = plain(zone[callout - 1].segs).indexOf('│');
+  assert.ok(plain(zone[callout].segs).indexOf('┃') > divider, 'the note starts right of the divider');
+  assert.equal(w.signals.reports.get('svc').length, 1);
+  const rows = buildRows(w, { marks: {}, comments: [] }, { width: 140, tint: false, lens: 'services' });
+  const priceLine = rows.find((r) => r.kind === 'code' && r.fid === 'svc\0src/main/java/a/Price.java' && r.at?.new === 4);
+  // right after the new line's number: side by side, and inline
+  const markAfter4 = (row) => row.segs.find((x, i) => i > 0 && /(^|\s)4$/.test(row.segs[i - 1][0]) && row.segs[i - 1][1] === 'gray' && /[●◐○]/.test(x[0]));
+  assert.deepEqual(markAfter4(priceLine), ['○', 'delfg bold']);
+  const unified = buildRows(w, { marks: {}, comments: [] }, { width: 140, tint: false, lens: 'services', layout: 'unified' });
+  const priceNew = unified.find((r) => r.kind === 'code' && r.fid === 'svc\0src/main/java/a/Price.java' && r.at?.new === 4);
+  assert.deepEqual(markAfter4(priceNew), ['○', 'delfg bold']);
+  assert.ok(!priceLine.segs.some(([t]) => t === '┃')); // the divider stays plain
+  assert.match(rows.map((r) => plain(r.segs)).join('\n'), /coverage: 1 report, 0m old/);
+  // coverage alone: fr's other checks and their marks are left out, the coverage stays
+  const only = buildRows(w, { marks: {}, comments: [] }, { width: 140, tint: false, lens: 'services', show: { agent: false, fr: false, comments: false } });
+  const t = only.map((r) => plain(r.segs)).join('\n');
+  assert.match(t, /NOT COVERED/);
+  assert.match(t, /1 OF 2 BRANCHES NOT TAKEN/);
+  assert.doesNotMatch(t, /TEST NOT CHANGED|EXPECTED VALUE CHANGED/);
+  const noCov = buildRows(w, { marks: {}, comments: [] }, { width: 140, tint: false, lens: 'services', layout: 'unified', show: { coverage: false } });
+  assert.ok(!noCov.some((r) => r.kind === 'code' && r.segs.some(([x]) => /[●◐○]/.test(x))));
+  assert.doesNotMatch(noCov.map((r) => plain(r.segs)).join('\n'), /NOT COVERED/);
+
+  // a report older than the file: its lines may have moved, nothing is marked
+  const earlier = new Date(Date.now() - 3_600_000 * 5);
+  fs.utimesSync(report, earlier, earlier);
+  const w2 = await loadWorkspace(path.join(top, 'feature'));
+  assert.deepEqual((w2.signals.files.get('svc\0src/main/java/a/Tax.java') ?? []).map((x) => x.kind), ['coverage-stale', 'test-changed']);
+  assert.ok(!(w2.signals.units.get(w2.repos[0].files.find((f) => f.file === 'src/main/java/a/Tax.java').hunks[0].key) ?? []).some((x) => x.kind === 'covered'));
+  fs.rmSync(path.join(wt, 'target'), { recursive: true, force: true });
 });
 
 // ---------- assertion heuristics ----------

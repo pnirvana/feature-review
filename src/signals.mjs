@@ -9,7 +9,12 @@
 import path from 'node:path';
 import { git, fileTexts } from './workspace.mjs';
 import { testSignals } from './asserts.mjs';
+import { repoCoverage } from './coverage.mjs';
 import { unitIds } from './annotations.mjs';
+
+/** The layer a signal belongs to, for showing or hiding it (f in the viewer): coverage, or fr's other checks. */
+const COVERAGE_KINDS = new Set(['covered', 'not-covered', 'partly-covered', 'branch-not-taken', 'coverage-stale']);
+export const signalLayer = (s) => (COVERAGE_KINDS.has(s.kind) ? 'coverage' : 'fr');
 
 // ---------- mechanical ----------
 
@@ -165,7 +170,9 @@ async function repoFiles(r) {
 /**
  * The signals of a workspace (loadWorkspace()).
  * → {units: Map unit → [signal], files: Map "repo\0file" → [signal], mechanical: Set of units,
- *    codeOfTest: Map test file → [its code files in the change], testsOfCode: the other way}
+ *    codeOfTest: Map test file → [its code files in the change], testsOfCode: the other way,
+ *    coverage: Map file → {lines: Map new line → 'covered'|'partly'|'missed', stale},
+ *    reports: Map repo → [{file, mtime}] (the JaCoCo reports found)}
  * A signal is {kind, label (a badge), text, level: 'fact' | 'warn' | 'info', pair?: [file]
  * (the paired test or code, a jump target)}; files are "repo\0file".
  */
@@ -174,6 +181,8 @@ export async function computeSignals(ws) {
   const files = new Map();
   const mechanical = new Set();
   const codeOfTest = new Map();
+  const coverage = new Map();
+  const reports = new Map();
   const testsOfCode = new Map();
   const add = (map, k, s) => map.set(k, [...(map.get(k) ?? []), s]);
   const ids = new Map(unitIds(ws).map((u) => [u.unit, u.id]));
@@ -204,6 +213,49 @@ export async function computeSignals(ws) {
         mechanical.add(f.key);
         add(units, f.key, { kind: 'renamed', label: 'RENAMED ONLY', text: 'content unchanged', level: 'fact' });
       }
+
+  // coverage of the changed lines, from the JaCoCo reports a build left (src/coverage.mjs)
+  const ago = (ms) => {
+    const m = Math.max(0, Math.round((Date.now() - ms) / 60000));
+    return m < 60 ? `${m}m old` : m < 2880 ? `${Math.round(m / 60)}h old` : `${Math.round(m / 1440)}d old`;
+  };
+  for (const r of repos) {
+    const cov = repoCoverage(r, ws.manifest ?? {});
+    reports.set(r.name, cov.reports);
+    for (const [k, c] of cov.files) coverage.set(k, c);
+    for (const f of r.files) {
+      const c = cov.files.get(`${r.name}\0${f.file}`);
+      if (!c) continue;
+      if (c.stale) {
+        add(files, `${r.name}\0${f.file}`, { kind: 'coverage-stale', label: 'COVERAGE OUT OF DATE', text: `the report (${ago(c.reportTime)}) is older than this file: build again to see its lines`, level: 'info' });
+        continue;
+      }
+      for (const h of f.hunks) {
+        if (mechanical.has(h.key)) continue;
+        const states = h.lines.filter(([t]) => t === '+').map(([, , , n]) => c.lines.get(n)).filter(Boolean);
+        if (!states.length) continue;
+        const missed = states.filter((s) => s === 'missed').length;
+        const partly = states.filter((s) => s === 'partly').length;
+        const n = states.length;
+        if (missed) add(units, h.key, { kind: 'not-covered', label: 'NOT COVERED', text: `${missed} of ${n} changed lines no test runs${partly ? `, ${partly} with branches not taken` : ''}`, level: 'warn' });
+        else if (partly) add(units, h.key, { kind: 'partly-covered', label: 'BRANCHES NOT TAKEN', text: `on ${partly} of ${n} changed lines`, level: 'warn' });
+        else add(units, h.key, { kind: 'covered', label: 'COVERED', text: `a test runs all ${n} changed lines`, level: 'info' });
+        // under each line with branches not taken: how many (JaCoCo counts them, it does not say which)
+        for (const [t, , , ln] of h.lines) {
+          const b = t === '+' && c.branches?.get(ln);
+          if (!b) continue;
+          const all = b.missed + b.taken;
+          add(units, h.key, {
+            kind: 'branch-not-taken',
+            label: `${b.missed} OF ${all} BRANCHES NOT TAKEN`,
+            text: `${b.taken === 1 ? 'the tests always go the same way here' : `the tests go ${b.taken} of ${all} ways here`} (JaCoCo does not say which)`,
+            level: 'warn',
+            at: { side: 'new', line: ln },
+          });
+        }
+      }
+    }
+  }
 
   // tests and code, per repository (a test lives with its code)
   await Promise.all(
@@ -272,5 +324,5 @@ export async function computeSignals(ws) {
       }
     }),
   );
-  return { units, files, mechanical, codeOfTest, testsOfCode };
+  return { units, files, mechanical, codeOfTest, testsOfCode, coverage, reports };
 }

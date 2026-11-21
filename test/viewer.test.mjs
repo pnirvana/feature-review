@@ -251,8 +251,9 @@ test('s switches side by side ↔ inline with one press each way', async () => {
 test('⏎ on an unchanged caller in the diff shows its code, again hides it', async () => {
   const { term } = await viewer({ rows: 40, cols: 130 });
   await term.type('/', ...'CALLER TO CHECK', '\r', '\x1b');
-  assert.match(term.cursor().text, /CALLER TO CHECK +refund-service-seed\/.*RefundService\.java:4-6 +⏎ show the code/);
-  const seedLine = (l) => /4 +public void refund\(String orderId, long amount\) \{/.test(l) && /┃/.test(l);
+  assert.match(term.cursor().text, /CALLER TO CHECK .*⏎ show the code/);
+  assert.match(term.screen()[term.cursor().row + 1], /RefundService\.java:4-6/); // the caller, below (shortened to fit)
+  const seedLine = (l) => /4 +public void refund\(String orderId/.test(l) && /┃/.test(l);
   assert.ok(!term.screen().some(seedLine));
   await term.type('\r');
   assert.match(term.cursor().text, /⏎ hide the code/);
@@ -264,14 +265,16 @@ test('⏎ on an unchanged caller in the diff shows its code, again hides it', as
 test('a hides the annotations and shows them again; the top line stays, the cursor keeps its line', async () => {
   const { term } = await viewer({ rows: 40, cols: 130 });
   await term.type('/', ...'seen.contains', '\r', '\x1b');
-  const before = { where: term.where(), top: term.screen()[1] };
+  // the first line on screen that stays (annotations hiding have a ┃ bar down their left)
+  const firstLine = () => term.screen().slice(1).find((l) => l.replace(/[▎\s]/g, '') && !l.includes('┃'));
+  const before = { where: term.where(), top: firstLine() };
   assert.ok(term.screen().some((l) => /CALLER TO CHECK/.test(l)));
   await term.type('a');
   assert.match(term.screen()[0], /annotations hidden/);
   assert.ok(!term.screen().some((l) => /CALLER TO CHECK|TEST CHANGED/.test(l)));
   assert.ok(term.screen().some((l) => /▌.*public void refund\(String orderId, long amount/.test(l))); // the mark stays
   assert.equal(term.where(), before.where);
-  assert.equal(term.screen()[1], before.top); // what is below closes up, as a fold does
+  assert.equal(firstLine(), before.top); // what is below closes up, as a fold does
   await term.type('a');
   assert.ok(term.screen().some((l) => /CALLER TO CHECK/.test(l)));
 });
@@ -285,4 +288,33 @@ test('a on a note that goes away: the next line that stays; a again: back on the
   assert.ok(term.screen().some((l) => /RefundService\.refund skips a key it has seen/.test(l))); // the group's why stays
   await term.type('a');
   assert.match(term.cursor().text, /NO TEST +none found by name/);
+});
+
+test('/ searches as you type; esc goes back to where it started', async () => {
+  const { term } = await viewer({ rows: 30, cols: 130 });
+  const start = term.where();
+  await term.type('/', ...'seen.ad');
+  assert.match(term.cursor().text, /seen\.add\(key\)/); // there before ⏎
+  assert.match(term.screen().at(-1) + term.screen().join(''), /\/seen\.ad/);
+  await term.type('\x1b');
+  assert.equal(term.where(), start);
+  await term.type('/', ...'IdempotencyKey', '\r');
+  assert.match(term.cursor().text, /IdempotencyKey/);
+});
+
+test('f: show or hide kinds of markers, their notes and their marks', async () => {
+  const { term } = await viewer({ rows: 40, cols: 130 });
+  await term.type('/', ...'seen.contains', '\r', '\x1b');
+  const signature = () => term.screen().find((l) => /public void refund\(String orderId, long amount/.test(l)) ?? '';
+  assert.match(signature(), /▌/); // the agent's mark: a caller depends on it
+  await term.type('f');
+  assert.match(term.screen().join('\n'), /show: +1 agent ✓ +2 fr ✓ +3 coverage ✓ +4 comments ✓/);
+  await term.type('1', '\x1b');
+  assert.match(term.screen()[0], /only fr, coverage, comments/);
+  assert.ok(!term.screen().some((l) => /CALLER TO CHECK/.test(l)));
+  assert.doesNotMatch(signature(), /▌/); // its mark is gone too
+  assert.ok(term.screen().some((l) => /TEST CHANGED|NO TEST/.test(l))); // fr's stay
+  await term.type('f', '0', '\x1b');
+  assert.ok(term.screen().some((l) => /CALLER TO CHECK/.test(l)));
+  assert.doesNotMatch(term.screen()[0], /only/);
 });

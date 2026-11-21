@@ -352,8 +352,9 @@ test('findings sit under their line in the diff; the test intent before its code
   for (const lens of ['groups', 'services']) {
     const rows = buildRows(ws, { marks: {}, comments: [] }, { width: 110, tint: false, lens, ann: checked });
     // the unchanged caller: under the changed line it depends on (new 4), the line marked
-    const ghost = rows.findIndex((r) => /CALLER TO CHECK +refund-service-seed\/.*RefundService\.java:4-6/.test(plain(r.segs)));
+    const ghost = rows.findIndex((r) => /CALLER TO CHECK/.test(plain(r.segs)));
     assert.ok(ghost > 0, `${lens}: the caller is shown`);
+    assert.match(plain(rows[ghost].segs) + plain(rows[ghost + 1].segs), /RefundService\.java:4-6/); // beside the badge, or below it
     assert.equal(rows[ghost].hunk, rs);
     assert.deepEqual(rows[ghost - 1].at, { old: null, new: 4 }, `${lens}: right under new line 4`);
     assert.match(plain(rows[ghost - 1].segs), /^▎? *▌/, `${lens}: the line is marked`);
