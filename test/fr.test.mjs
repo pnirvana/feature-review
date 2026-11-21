@@ -339,3 +339,35 @@ test('the intent shows on top in both lenses', async () => {
     assert.match(t, /Intent *\n *Refunds must be idempotent/, lens);
   }
 });
+
+// ---------- ghosts and test notes in place ----------
+
+test('ghosts and test notes appear under their hunk, in both lenses, and nothing is lost', async () => {
+  const ws = await loadWorkspace(dir);
+  const ann = sampleAnnotations();
+  const checked = { ann, ...(await checkAnnotations(ann, ws)) };
+  const rs = fileOf(ws, 'refund-service', 'RefundService.java').hunks[0].key;
+  const spec = fileOf(ws, 'refund-service', 'RefundServiceSpec.groovy').hunks[0].key;
+  for (const lens of ['groups', 'services']) {
+    const rows = buildRows(ws, { marks: {}, comments: [] }, { width: 100, tint: false, lens, ann: checked });
+    const ghost = rows.findIndex((r) => /UNCHANGED +UNCLEAR/.test(plain(r.segs)));
+    const lastCode = rows.findLastIndex((r) => r.kind === 'code' && r.hunk === rs);
+    assert.ok(ghost > lastCode && lastCode >= 0, `${lens}: ghost under its hunk`);
+    assert.equal(rows[ghost].hunk, rs);
+    const t = text(rows);
+    assert.match(t, /TEST INTENT +books a refund once per key/);
+    assert.match(t, /NAME VS ASSERTION/);
+    assert.match(t, /LOOSENED[\s\S]*1 \* ledger\.book\('o1', -5\)/); // the cited old line
+    assert.equal(rows.find((r) => /TEST INTENT/.test(plain(r.segs))).hunk, spec);
+    assert.doesNotMatch(t, /Other notes/);
+  }
+  // folded: the count on the hunk's title
+  const folded = buildRows(ws, { marks: { [rs]: { at: 'x' } }, comments: [] }, { width: 100, tint: false, lens: 'services', ann: checked });
+  assert.match(text(folded), /RefundService\.java.*✓ reviewed.*1 unchanged caller/); // the file folds, its title counts
+  assert.doesNotMatch(text(folded), /Other notes/); // folded away, not lost
+  // a ghost depending on no hunk goes to "Other notes"
+  const a2 = clone(ann);
+  a2.ghosts[0].because = [{ path: '../remotes/refund-service-seed', file: 'src/main/java/shop/refund/Legacy.java', lines: '1' }];
+  const c2 = { ann: a2, ...(await checkAnnotations(a2, ws)) };
+  assert.match(text(buildRows(ws, { marks: {}, comments: [] }, { width: 100, tint: false, lens: 'groups', ann: c2 })), /Other notes[\s\S]*UNCHANGED/);
+});

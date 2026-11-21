@@ -69,6 +69,11 @@ grouped**: every hunk no group explains. `tab` switches to the services lens. `]
 the agent calls mechanical starts folded and says "claimed, not verified". The viewer
 reloads the file when the agent rewrites it, and says when the notes may be stale.
 
+Under a hunk, in either lens: the **unchanged callers** that depend on it (status
+broken, unclear or ok, with their code), and **test intents** under a test's hunk (the
+behaviour it specifies, what it really asserts, flags such as a loosened assertion with
+the old line). Text in the annotations is Markdown.
+
 ## Development
 
 ```sh

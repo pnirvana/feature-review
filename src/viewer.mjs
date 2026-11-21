@@ -408,6 +408,41 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     relayout(h ? rowKey(h) : null);
   }
 
+  /**
+   * The other lens, on the same code: the same line, else the same hunk, else the same
+   * file (a group's line: its first hunk), on the same screen row as before.
+   */
+  function switchLens() {
+    const r = ui.rows[ui.cur];
+    const screenRow = ui.cur - ui.top;
+    const unit = r?.hunk ?? (r?.units?.length ? r.units[0] : null);
+    const file = r?.fid ?? (unit ? fid(fileById(unitFile(unit))?.f ?? {}) : null);
+    const line = r?.kind === 'code' && r.line ? JSON.stringify(r.line) : null;
+    ui.lens = lensNow() === 'groups' ? 'services' : 'groups';
+    relayout(null);
+    const tries = [
+      (x) => line && x.kind === 'code' && x.hunk === unit && JSON.stringify(x.line) === line,
+      (x) => unit && x.kind === 'hunk' && x.hunk === unit,
+      (x) => unit && x.units?.includes(unit) && ['file', 'blank'].includes(x.kind),
+      (x) => file && x.kind === 'file' && x.fid === file,
+      (x) => file && x.fid === file,
+    ];
+    for (const t of tries) {
+      const i = ui.rows.findIndex(t);
+      if (i >= 0) {
+        ui.cur = i;
+        break;
+      }
+    }
+    ui.top = Math.max(0, ui.cur - screenRow);
+    draw();
+  }
+  /** The fid of the file a unit (hunk key, or a hunkless file's key) belongs to. */
+  function unitFile(unit) {
+    for (const r of ui.ws?.repos ?? []) for (const f of r.files) if (f.key === unit || f.hunks.some((h) => h.key === unit)) return fid(f);
+    return null;
+  }
+
   function ask({ label, multiline = true, value = '', onSubmit }) {
     const vi = ['1', 'true', 'yes', 'on'].includes(String(process.env.FR_VI_MODE || '').toLowerCase());
     ui.input = { label, multiline, onSubmit, field: textField(value, { multiline, vi }) };
@@ -530,10 +565,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     else if (k === 'z') toggleFold('outer');
     else if (k === '\t') {
       if (!ui.ann?.groups.length) return flash(ui.annError ? `annotations: ${ui.annError}` : `no groups: the agent writes them to ${annotationsPath(ui.ws.root)}`, 'yellow');
-      // stay on the same hunk (or file) in the other lens
-      const r = ui.rows[ui.cur];
-      ui.lens = lensNow() === 'groups' ? 'services' : 'groups';
-      relayout(r?.hunk ? rowKey({ kind: 'hunk', fid: r.fid, hunk: r.hunk }) : r?.fid ? rowKey({ kind: 'file', fid: r.fid }) : null);
+      return switchLens();
     }
     else if (k === 'Z') foldAll();
     else if (k === 'c') return comment();

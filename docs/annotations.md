@@ -5,9 +5,10 @@ and the guarantees the tool gives; the agent definition (what to investigate, ho
 written there.
 
 Status (2026-11-21): **settled** (the answers are at the end). Built: `fr hunks`,
-`fr check [--stamp]`, and groups in the viewer (the groups lens). Next: ghosts and test
-notes in place, then design, names, contracts and rollout as views of their own. The
-other sections are already checked by `fr check`.
+`fr check [--stamp]`, groups in the viewer (the groups lens), ghosts and test notes in
+place (under their hunk, in both lenses; a folded hunk, file or group counts them; notes
+on no hunk go to "Other notes"). Next: design, names, contracts and rollout as views of
+their own. Those sections are already checked by `fr check`.
 
 ## Principles
 

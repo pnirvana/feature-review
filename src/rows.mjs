@@ -160,8 +160,92 @@ function mdRows(text, width, base, { extra = '' } = {}) {
 function context(ws, st, opts) {
   const marked = (k) => Boolean(st.marks[k]);
   const comments = st.comments.map((c) => ({ c, loc: locate(c, ws) }));
-  return { ws, st, ...opts, marked, comments, shown: new Set() };
+  return { ws, st, ...opts, marked, comments, shown: new Set(), notes: notesByUnit(opts.ann), placed: new Set() };
 }
+
+/**
+ * The annotations shown in place, by the unit (hunk) they belong under: a ghost under the
+ * first hunk it depends on (`because`), a test note under the test's hunk. Notes on no
+ * hunk go under the key null. → Map unit|null → [{kind: 'ghost'|'test', x, res}]
+ */
+function notesByUnit(ann) {
+  const out = new Map();
+  if (!ann?.ann) return out;
+  const res = (ref) => ann.refs?.get(ref) ?? null;
+  const add = (unit, note) => out.set(unit, [...(out.get(unit) ?? []), note]);
+  for (const g of Array.isArray(ann.ann.ghosts) ? ann.ann.ghosts : []) {
+    const unit = (Array.isArray(g?.because) ? g.because : []).map((r) => res(r)).find((r) => r?.ok && r.units.length)?.units[0] ?? null;
+    add(unit, { kind: 'ghost', x: g, res: res(g?.ref) });
+  }
+  for (const t of Array.isArray(ann.ann.tests) ? ann.ann.tests : []) {
+    const r = res(t?.ref);
+    add(r?.ok && r.units.length ? r.units[0] : null, { kind: 'test', x: t, res: r });
+  }
+  return out;
+}
+
+const STATUS_BADGE = { broken: 'riskhigh', unclear: 'riskmedium', ok: 'risklow' };
+const STATUS_BAR = { broken: 'delfg', unclear: 'yellow', ok: 'addfg' };
+const human = (kind) => String(kind ?? '').replace(/-/g, ' ').toUpperCase();
+
+/** A ghost or a test note, as a block with a bar down its left. */
+function noteRows(ctx, { kind, x, res }, base) {
+  const bar = kind === 'ghost' ? (STATUS_BAR[x?.status] ?? 'yellow') : 'cyan';
+  const w = ctx.width - 4;
+  const body = [];
+  if (kind === 'ghost') {
+    body.push({
+      kind: 'note',
+      ...base,
+      segs: [
+        [' UNCHANGED ', 'role'],
+        ['  ', ''],
+        ...(x?.status ? [[` ${String(x.status).toUpperCase()} `, STATUS_BADGE[x.status] ?? 'inverse'], ['  ', '']] : []),
+        [refText(res, x?.ref), res?.ok ? 'bold' : 'red bold'],
+        ...(res && !res.ok ? [[`  does not resolve: ${res.error}`, 'red']] : []),
+      ],
+    });
+    if (x?.why) body.push(...mdRows(x.why, w, base));
+    if (x?.found_by) body.push({ kind: 'note', ...base, segs: [['found by ', 'dim'], [String(x.found_by), 'dim italic']] });
+    if (res?.ok && res.code) body.push(spacer(base), ...citedRows({ ...ctx, width: w }, res, base));
+  } else {
+    body.push({ kind: 'note', ...base, segs: [[' TEST INTENT ', 'role'], ['  ', ''], [String(x?.name ?? refText(res, x?.ref)), 'bold']] });
+    if (x?.behaviour) body.push(...mdRows(x.behaviour, w, base));
+    if (x?.asserts) {
+      body.push({ kind: 'note', ...base, segs: [['asserts', 'dim bold']] });
+      body.push(...mdRows(x.asserts, w, base, { extra: 'dim' }));
+    }
+    for (const f of Array.isArray(x?.flags) ? x.flags : []) {
+      body.push(spacer(base), { kind: 'note', ...base, segs: [[` ${human(f?.kind)} `, 'riskmedium']] });
+      if (f?.note) body.push(...mdRows(f.note, w, base));
+      for (const r of Array.isArray(f?.refs) ? f.refs : []) {
+        const fr = ctx.ann?.refs?.get(r);
+        body.push({ kind: 'note', ...base, segs: [[refText(fr, r), fr?.ok ? 'dim' : 'red']] });
+        if (fr?.ok && fr.code) body.push(...citedRows({ ...ctx, width: w }, fr, base));
+      }
+    }
+  }
+  return [spacer(base), ...body.map((r) => ({ ...r, segs: [['  ', ''], ['┃ ', bar], ...r.segs] }))];
+}
+
+/** The notes placed under a unit, once per view (a hunk shown in two groups gets them the first time). */
+function notesFor(ctx, unit, base) {
+  if (ctx.placed.has(unit)) return [];
+  const list = ctx.notes.get(unit) ?? [];
+  if (list.length) ctx.placed.add(unit);
+  return list.flatMap((n) => noteRows(ctx, n, base));
+}
+/** Notes folded away with their units: counted as placed (they are not lost), → their count text. */
+function hideNotes(ctx, units) {
+  for (const u of units) if (ctx.notes.has(u)) ctx.placed.add(u);
+  return noteCount(ctx, units);
+}
+const noteCount = (ctx, units) => {
+  const list = [].concat(units).flatMap((u) => ctx.notes.get(u) ?? []);
+  const g = list.filter((n) => n.kind === 'ghost').length;
+  const t = list.length - g;
+  return [g && plural(g, 'unchanged caller'), t && plural(t, 'test note')].filter(Boolean).join(', ');
+};
 
 function segsForFile(ctx, f) {
   const h2 = ctx.hl.get(fid(f));
@@ -199,6 +283,7 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
       ...(hr ? [['  ✓ reviewed', 'green']] : []),
       ...(note ? [[`  ${note}`, 'yellow']] : []),
       ...(hf && here.length ? [[`  ${plural(here.length, 'comment')}`, 'magenta']] : []),
+      ...(hf && noteCount(ctx, h.key) ? [[`  ${hideNotes(ctx, [h.key])}`, 'cyan']] : []),
     ],
   });
   if (hf) return rows;
@@ -220,6 +305,7 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
     rows.push(row);
     for (const x of after.get(i) ?? []) rows.push(...commentRowsOf(ctx, x, { ...base, hunk: h.key }));
   });
+  rows.push(...notesFor(ctx, h.key, { ...base, hunk: h.key }));
   return rows;
 }
 
@@ -228,7 +314,7 @@ function hunksRows(ctx, items, guide = null) {
   const rows = [];
   items.forEach(({ f, h, base, note }, i) => {
     if (i) rows.push(spacer(base, guide));
-    rows.push(...(h ? hunkRows(ctx, f, h, base, { note }) : [wholeFileRow(f, base)]));
+    rows.push(...(h ? hunkRows(ctx, f, h, base, { note }) : [wholeFileRow(f, base), ...notesFor(ctx, f.key, base)]));
   });
   return rows;
 }
@@ -263,6 +349,7 @@ function fileTitle(ctx, f, { folded, units = unitsOf(f), base = {} }) {
       ...(f.dirty ? [['  ● uncommitted', 'yellow']] : []),
       [reviewed ? '  ✓ reviewed' : units.length > 1 ? `  ${fd}/${units.length}` : '', reviewed ? 'green' : 'dim'],
       ...(folded && n ? [[`  ${plural(n, 'comment')}`, 'magenta']] : []),
+      ...(folded && noteCount(ctx, units) ? [[`  ${hideNotes(ctx, units)}`, 'cyan']] : []),
     ],
   };
 }
@@ -373,7 +460,12 @@ function groupHead(ctx, { gid, n, title, folded, units, meta, bg }) {
   const done = units.filter(marked).length;
   return [
     { kind: 'group', group: gid, units, folded, segs: band([[folded ? ' ▸ ' : ' ▾ ', 'dim'], ...(n ? [[`${n}  `, 'bold']] : []), [title, 'bold']], width, bg) },
-    { kind: 'note', group: gid, units, segs: band([['   ', ''], ...meta, ...(meta.length ? [['     ', '']] : []), progress(done, units.length)], width, bg) },
+    {
+      kind: 'note',
+      group: gid,
+      units,
+      segs: band([['   ', ''], ...meta, ...(meta.length ? [['     ', '']] : []), progress(done, units.length), ...(folded && noteCount(ctx, units) ? [[`     ${hideNotes(ctx, units)}`, 'cyan']] : [])], width, bg),
+    },
   ];
 }
 
@@ -486,6 +578,12 @@ export function buildRows(ws, st, { width = 120, layout = 'auto', fold = new Map
   if (lens === 'groups' && !ann?.groups?.length) lens = 'services';
   const ctx = context(ws, st, { width, layout, fold, hl, tint, lens, ann });
   const body = lens === 'groups' ? groupsLens(ctx) : servicesLens(ctx);
+  // notes on no hunk, or under a hunk this view does not show: never lost
+  const rest = [...ctx.notes].filter(([u]) => !ctx.placed.has(u)).flatMap(([, list]) => list);
+  if (rest.length) {
+    body.push(spacer(), spacer(), ...groupHead(ctx, { gid: '(other notes)', title: 'Other notes', folded: false, units: [], meta: [[`${plural(rest.length, 'note')} not shown under a hunk above`, '']], bg: BAND.ungrouped }));
+    for (const n of rest) body.push(...noteRows(ctx, n, { group: '(other notes)' }));
+  }
   const top = [summary(ctx, lens === 'groups' ? [[`   ${plural(ann.groups.length, 'group')}`, 'cyan']] : [])];
   if (ann?.errors?.length) top.push({ kind: 'note', segs: [[`the annotations have ${plural(ann.errors.length, 'error')}: fr check lists them`, 'red']] });
   for (const s of ann?.stale ?? []) top.push({ kind: 'note', segs: [[`annotations may be stale: ${s}`, 'yellow']] });
