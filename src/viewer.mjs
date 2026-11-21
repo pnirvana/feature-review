@@ -13,7 +13,6 @@ import { overviewRows, tabBar, TABS } from './overview.mjs';
 import { ESC, fit, plain, charWidth, strWidth, segsWidth } from './md/term.mjs';
 import { textField, keyField, fieldText, fieldRows, fieldMode } from './ui/textfield.mjs';
 
-const LAYOUTS = ['auto', 'split', 'unified'];
 
 const HELP = [
   'fr: feature review',
@@ -30,7 +29,7 @@ const HELP = [
   'c               comment on the line under the cursor (on a file or hunk line: the file)',
   'e x             on a comment: edit it / delete it (x twice)',
   'o               open the line in $EDITOR',
-  's               layout: auto, split, unified',
+  's               side by side ↔ inline',
   'r               reload (the worktrees and the review state; annotations reload by themselves)',
   '/  n N  esc     search, next / previous match, end the search',
   'q               quit',
@@ -81,6 +80,8 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
   // ---------- data ----------
   const rowKey = (r) => (r ? [r.kind, r.group ?? '', r.fid ?? r.repo ?? '', r.hunk ?? '', JSON.stringify(r.line ?? null), r.comment ?? ''].join('|') : null);
   const lensNow = () => (ui.ann?.groups.length ? (ui.lens ?? 'groups') : 'services');
+  /** The layout on screen: auto is split when the code is 110 columns wide (codeView), else unified. */
+  const shownLayout = () => (ui.layout !== 'auto' ? ui.layout : opts().width - (lensNow() === 'groups' ? 2 : 0) >= 110 ? 'split' : 'unified');
   const opts = () => ({ width: Math.max(30, W() - 2), layout: ui.layout, fold: ui.fold, hl: ui.hl, lens: lensNow(), ann: ui.ann });
   function relayout(keep = rowKey(ui.rows[ui.cur])) {
     if (!ui.ws) return;
@@ -119,8 +120,9 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     if (watching) fs.unwatchFile(annotationsPath(watching));
     watching = root;
     // the agent rewrites the file while the viewer is open: show the new one
-    fs.watchFile(annotationsPath(root), { interval: 1000 }, async () => {
-      if (!ui.ws) return;
+    fs.watchFile(annotationsPath(root), { interval: 1000 }, async (now, before) => {
+      // also called when nothing changed for a file that is not there (e.g. its directory appeared)
+      if (!ui.ws || now.mtimeMs === before.mtimeMs) return;
       await loadAnnotations(ui.ws);
       relayout();
       if (ui.ov) ui.ann ? ovLayout() : (ui.ov = null);
@@ -196,7 +198,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
       [` ${ui.ws.name} `, 'bold'],
       [` reviewed ${done}/${all.length}`, all.length && done === all.length ? 'green bold' : ''],
       ...(ui.st.comments.length ? [[`  ${ui.st.comments.length} comment${ui.st.comments.length === 1 ? '' : 's'}`, 'magenta']] : []),
-      [`  ${lensNow()} · ${ui.layout}`, 'dim'],
+      [`  ${lensNow()} · ${shownLayout() === 'split' ? 'side by side' : 'inline'}${ui.layout === 'auto' ? ' (auto)' : ''}`, 'dim'],
       ...(ui.annError ? [['  annotations unreadable', 'red']] : ui.ann?.errors.length ? [[`  annotations: ${ui.ann.errors.length} error${ui.ann.errors.length === 1 ? '' : 's'}`, 'red']] : []),
       ...(ui.loading ? [['  reading…', 'dim']] : ui.highlighting ? [['  highlighting…', 'dim']] : []),
     ];
@@ -730,7 +732,8 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     else if (k === 'x') return deleteAt();
     else if (k === 'o') return openEditor();
     else if (k === 's') {
-      ui.layout = LAYOUTS[(LAYOUTS.indexOf(ui.layout) + 1) % LAYOUTS.length];
+      // switch what is on screen; auto (the setting) only picks the start
+      ui.layout = shownLayout() === 'split' ? 'unified' : 'split';
       relayout();
     } else if (k === 'r') return void reload('reloaded');
     else if (k === '/')

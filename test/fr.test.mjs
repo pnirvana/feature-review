@@ -263,7 +263,7 @@ test('groups lens: reading order by group, ungrouped hunks last and never hidden
   const rows = buildRows(ws, { marks: {}, comments: [] }, { width: 100, tint: false, lens: 'groups', ann: checked });
   const t = text(rows);
   assert.match(t, /▾ 1 {2}Refunds carry an idempotency key.*\n *HIGH {3}money · public contract · deleted check/);
-  assert.match(t, /▸ 3 {2}Remove the legacy refund path.*\n.*claimed mechanical, not verified/); // mechanical: folded
+  assert.match(t, /▸ 3 {2}Remove the legacy refund path.*\n.*claimed mechanical: 1 of 2 hunks not verified/); // mechanical: folded
   assert.match(t, /Not grouped *\n *1 hunk no group explains/);
   const ug = rows.findIndex((r) => r.kind === 'group' && r.group === UNGROUPED);
   assert.ok(rows.slice(ug).some((r) => r.kind === 'file' && r.fid.endsWith('IdempotencyKey.java')));

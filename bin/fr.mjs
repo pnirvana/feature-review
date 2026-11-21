@@ -88,7 +88,8 @@ const range = ([a, b]) => (a === b ? `${a}` : `${a}-${b}`);
 
 async function hunks() {
   const ws = await loadWorkspace(dir);
-  const list = unitIds(ws).map(({ id, repo, f, h }) => ({
+  const sigText = (s) => [s.label?.toLowerCase(), s.text].filter(Boolean).join(': ');
+  const list = unitIds(ws).map(({ id, unit, repo, f, h }) => ({
     id,
     repo,
     file: f.file,
@@ -101,6 +102,9 @@ async function hunks() {
     ...(h?.header ? { context: h.header } : {}),
     ...(f.dirty ? { uncommitted: true } : {}),
     ...(f.binary ? { binary: true } : {}),
+    // what fr verified itself: an agent may skip explaining these
+    ...(ws.signals.mechanical.has(unit) ? { mechanical: true } : {}),
+    ...(ws.signals.units.get(unit)?.length ? { signals: ws.signals.units.get(unit).map(sigText) } : {}),
   }));
   if (o.json) return console.log(JSON.stringify(list, null, 2));
   for (const r of ws.repos) {
@@ -109,7 +113,7 @@ async function hunks() {
     const w = Math.max(0, ...mine.map((y) => y.id.length));
     for (const x of mine) {
       const lines = [x.old_lines && `old ${x.old_lines}`, x.new_lines && `new ${x.new_lines}`].filter(Boolean).join(' ') || (x.status === 'R' ? `renamed from ${x.old_file}` : 'no lines');
-      console.log(`  ${x.id.padEnd(w)}  ${x.status} ${x.file}  ${lines}  +${x.add} −${x.del}${x.context ? `  ${x.context}` : ''}${x.uncommitted ? '  (uncommitted)' : ''}`);
+      console.log(`  ${x.id.padEnd(w)}  ${x.status} ${x.file}  ${lines}  +${x.add} −${x.del}${x.context ? `  ${x.context}` : ''}${x.uncommitted ? '  (uncommitted)' : ''}${x.signals ? `  [${x.signals.join('; ')}]` : ''}`);
     }
   }
 }

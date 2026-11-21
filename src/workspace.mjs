@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readConfigFile } from './toml.mjs';
+import { computeSignals } from './signals.mjs';
 
 export const STATE_DIR = '.feature-review';
 export const MANIFEST = 'feature-review.toml';
@@ -227,12 +228,14 @@ export async function fileTexts(repo, f) {
   return { old, new: nw };
 }
 
-/** The whole workspace: discovery, manifest and every repository's change. */
+/** The whole workspace: discovery, manifest, every repository's change and its signals (src/signals.mjs). */
 export async function loadWorkspace(dir) {
   const ws = discover(dir);
   const manifest = readManifest(ws.root);
   const repos = await Promise.all(ws.repos.map((r) => readRepo(r, manifest)));
-  return { ...ws, manifest, repos };
+  const out = { ...ws, manifest, repos };
+  out.signals = await computeSignals(out);
+  return out;
 }
 
 /** Every reviewable unit of a workspace: a hunk, or a whole file when it has none. */

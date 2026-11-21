@@ -142,6 +142,19 @@ test('tab keeps the cursor on the same line and the same screen row', async () =
   assert.equal(term.where(), before.where);
 });
 
+test('tab without annotations says why there is no other lens', async () => {
+  const file = path.join(dir, '.feature-review', 'annotations.json');
+  fs.renameSync(file, `${file}.away`);
+  try {
+    const { term } = await viewer();
+    await term.type('\t');
+    assert.match(term.screen()[0], /services/);
+    assert.ok(term.screen().some((l) => l.includes('no groups: the agent writes them to')));
+  } finally {
+    fs.renameSync(`${file}.away`, file);
+  }
+});
+
 test('tab on a group heading goes to that group’s first hunk', async () => {
   const { term } = await viewer();
   await term.type(']', 'g', ']', 'g'); // group 2: the config
@@ -204,4 +217,19 @@ test('the viewer picks up annotations the agent rewrites', async () => {
   await term.type(']', 'g', ']', 'g');
   assert.match(term.cursor().text, /Timeout and replicas, rewritten/);
   fs.writeFileSync(path.join(dir, '.feature-review', 'annotations.json'), JSON.stringify(sampleAnnotations(), null, 2));
+});
+
+test('s switches side by side ↔ inline with one press each way', async () => {
+  const { term } = await viewer({ cols: 130, rows: 40 });
+  // a changed file's code (new files are always inline): line numbers on both sides of │
+  const split = () => term.screen().some((l) => /\d+ .*│ +\d+ /.test(l));
+  assert.match(term.screen()[0], /side by side \(auto\)/);
+  await term.type(']', 'u', 'v'); // on to RefundController, a changed file
+  assert.ok(split());
+  await term.type('s');
+  assert.match(term.screen()[0], /· inline/);
+  assert.ok(!split());
+  await term.type('s');
+  assert.match(term.screen()[0], /· side by side/);
+  assert.ok(split());
 });

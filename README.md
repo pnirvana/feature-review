@@ -47,6 +47,32 @@ fr ~/work/idempotent-refunds --print | less -R
   its files and hunks, side by side from 110 columns, unified below.
 - The repositories are only read; the working tree is read through a copy of the index.
 
+### What fr checks itself
+
+Facts the tool verifies, apart from the agent's words; blue badges mark them. Only git is
+needed.
+
+- **Verified mechanical**, folded like reviewed hunks (a glance, then `v`):
+  - `WHITESPACE ONLY`: re-indented or re-wrapped, the same words in the same order. In
+    Python, YAML and Makefiles a change of indentation is not whitespace.
+  - `MOVED`: every changed line is part of a block of 3 lines (or a whole short block, at
+    least 20 letters or digits) removed or added elsewhere in the change, in any file or
+    service; the title says where to (`moved to gateway:H4`). A hunk partly moved says how
+    much: `5 of 9 changed lines moved`.
+  - `RENAMED ONLY`: a file renamed with its content unchanged.
+
+  A group the agent calls mechanical says how many of its hunks are not verified.
+- **Tests and code**, paired by name in the same repository (`FooTest`, `FooTests`,
+  `FooIT`, `FooSpec`, `test_foo.py`, `foo_test.py`, `foo.spec.ts`):
+  - on a changed source file: `test changed: FooTest.java`, `its test not changed:
+    FooTest.java` or `no test found` (verified mechanical changes need none);
+  - `EXISTING TEST CHANGED` on a hunk that changes or removes lines of an existing test
+    whose code changes too: the expected values may have been made to fit the code;
+  - `TEST DELETED`.
+
+`fr hunks` lists the signals too (`mechanical: true` in `--json`), so the agent need not
+explain what fr has verified.
+
 ## Reviewing
 
 | keys | |
@@ -60,7 +86,7 @@ fr ~/work/idempotent-refunds --print | less -R
 | `space` `z` `Z` | fold the hunk · the file or group · all of them |
 | `c` · `e` · `x` | comment on the line (on a file line: the file) · edit · delete |
 | `o` | open the line in `$EDITOR` |
-| `s` · `r` · `/` · `?` · `q` | layout · reload · search · help · quit |
+| `s` · `r` · `/` · `?` · `q` | side by side ↔ inline · reload · search · help · quit |
 
 Reviewed hunks and files fold away. A mark is keyed by the hunk's repository, file and
 changed lines, so it survives a rebase and resets when the hunk changes. A comment

@@ -250,6 +250,13 @@ Built in this order, each step usable on its own:
    - tests changed together with code;
    - assertion heuristics;
    - coverage of the changed lines from existing JaCoCo reports.
+
+   **Built so far (2026-11-21), `src/signals.mjs`, README "What fr checks itself":**
+   verified mechanical (whitespace only, moved anywhere in the change, renamed only),
+   folded like reviewed hunks; tests paired with their code by name, with "its test not
+   changed", "no test found" and "existing test changed with its code". Still to do:
+   assertion heuristics (JUnit, Spock, pytest), JaCoCo coverage of the changed lines.
+   Pure identifier renames (an AST-level diff) are not verified yet.
 4. **The feedback key** (§11).
 
 Later: running the changed tests against the base, mutation testing on the changed

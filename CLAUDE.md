@@ -10,8 +10,9 @@ worktree). The changes are at the centre, as in a diff view; an agent's annotati
 approaches and the open questions (§13a; §13 records what is decided). The first
 version (§12) is built step by step; step 1, the viewer (`fr`, see README.md), is done.
 Step 2, the annotation file (`docs/annotations.md`), is built: `fr hunks`, `fr check`,
-the groups lens, ghosts and test intents in place, the overview (`m`). Next is step 3,
-the cheap objective signals (discovery §12).
+the groups lens, ghosts and test intents in place, the overview (`m`). Step 3, the cheap
+objective signals (`src/signals.mjs`), is under way: verified mechanical changes and
+tests paired with code are built; assertion heuristics and JaCoCo coverage are next.
 
 `npm test` runs the tests; `node test/fixture.mjs <dir>` builds a sample feature.
 
