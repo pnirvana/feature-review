@@ -38,8 +38,12 @@ const HELP = [
   'in annotations.json there (fr check validates them).',
 ];
 
-export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens = null }) {
-  const out = process.stdout;
+/**
+ * Open the viewer. input and output are the terminal (tests pass a fake one); exit ends
+ * the process on q. → {close, ui} once the change is loaded and highlighted.
+ */
+export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens = null, input = process.stdin, output = process.stdout, exit = (code) => process.exit(code), queryTheme = true }) {
+  const out = output;
   const ui = {
     ws: null,
     st: null,
@@ -213,14 +217,16 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
         ...rows.map((segs, i) => [[(i === 0 && above) || (i === rows.length - 1 && below) ? ' ⋮ ' : ' │ ', 'gray'], ...segs]),
       ];
     }
-    if (ui.flash && ui.flash.until > Date.now()) return [[[' ' + ui.flash.msg, ui.flash.style]]];
+    // a message or the search replaces the key hints; where the cursor is stays shown
+    const loc = where(ui.rows[ui.cur]);
+    const locRow = loc ? [[[' ', ''], [loc, 'gray']]] : [];
+    if (ui.flash && ui.flash.until > Date.now()) return [[[' ' + ui.flash.msg, ui.flash.style]], ...locRow];
     if (ui.search) {
       const n = ui.search.hits.length;
       const at = ui.search.hits.indexOf(ui.cur);
-      return [[[` /${ui.search.q}`, 'bold'], [n ? `  ${at >= 0 ? at + 1 : '-'}/${n}` : '  no match', n ? '' : 'red'], ['   n / N next / previous   esc end search', 'dim']]];
+      return [[[` /${ui.search.q}`, 'bold'], [n ? `  ${at >= 0 ? at + 1 : '-'}/${n}` : '  no match', n ? '' : 'red'], ['   n / N next / previous   esc end search', 'dim']], ...locRow];
     }
-    const loc = where(ui.rows[ui.cur]);
-    return [[[' ' + KEYS, 'dim']], ...(loc ? [[[' ', ''], [loc, 'gray']]] : [])];
+    return [[[' ' + KEYS, 'dim']], ...locRow];
   }
   function draw() {
     const w = W();
@@ -332,6 +338,16 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     while (end + 1 < ui.rows.length && ui.rows[end + 1].hunk === u.hunk) end++;
     const bodyH = H() - 3;
     if (end - i < bodyH && end >= ui.top + bodyH) ui.top = end - bodyH + 1;
+  }
+
+  /** Scroll so the rows matching pred show, as far as they fit, keeping the cursor on screen. */
+  function showRows(pred) {
+    const first = ui.rows.findIndex(pred);
+    if (first < 0) return;
+    let last = first;
+    while (last + 1 < ui.rows.length && pred(ui.rows[last + 1])) last++;
+    const bodyH = Math.max(1, H() - 3);
+    if (last >= ui.top + bodyH) ui.top = Math.min(last - bodyH + 1, ui.cur);
   }
 
   /** The next (or previous) comment, folded away or not: unfold its file and hunk and go there. */
@@ -464,8 +480,10 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
       label,
       onSubmit: (text) => {
         if (!text.trim()) return;
-        if (save((st) => addComment(st, at, text.trim()))) {
+        let c = null;
+        if (save((st) => (c = addComment(st, at, text.trim())))) {
           relayout();
+          showRows((x) => x.comment === c.id);
           flash('comment saved');
         }
       },
@@ -505,17 +523,18 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     else if (r.hunk) line = x.f.hunks.find((h) => h.key === r.hunk)?.newStart ?? 1;
     const editor = process.env.VISUAL || process.env.EDITOR || 'vi';
     out.write(`${ESC}?2004l${ESC}?25h${ESC}?1049l`);
-    if (process.stdin.isTTY) process.stdin.setRawMode(false);
+    if (input.isTTY) input.setRawMode(false);
     spawnSync('sh', ['-c', `${editor} "$@"`, 'sh', `+${line}`, path.join(x.repo.dir, x.f.file)], { stdio: 'inherit' });
-    if (process.stdin.isTTY) process.stdin.setRawMode(true);
+    if (input.isTTY) input.setRawMode(true);
     out.write(`${ESC}?1049h${ESC}?25l${ESC}?2004h${ESC}2J`);
     draw();
   }
 
   // ---------- keys ----------
   function quit() {
+    close();
     out.write(`${ESC}?2004l${ESC}?25h${ESC}?1049l`);
-    process.exit(0);
+    exit(0);
   }
   let pasting = false;
   function onKey(k) {
@@ -594,31 +613,43 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
 
   // ---------- start ----------
   // the terminal's colours, before anything else reads stdin (FR_BACKGROUND wins: a fixed choice)
-  if (!process.env.FR_BACKGROUND) {
-    const colors = await queryColors().catch(() => null);
+  if (queryTheme && !process.env.FR_BACKGROUND) {
+    const colors = await queryColors({ input, output }).catch(() => null);
     if (colors) applyTheme(colors);
   }
   out.write(`${ESC}?1049h${ESC}?25l${ESC}?2004h${ESC}2J`);
-  process.on('SIGTERM', quit);
-  process.on('SIGHUP', quit);
-  process.on('uncaughtException', (e) => {
-    out.write(`${ESC}?2004l${ESC}?25h${ESC}?1049l`);
-    console.error(e);
-    process.exit(1);
-  });
-  out.on('resize', () => {
+  if (out === process.stdout) {
+    process.on('SIGTERM', quit);
+    process.on('SIGHUP', quit);
+    process.on('uncaughtException', (e) => {
+      out.write(`${ESC}?2004l${ESC}?25h${ESC}?1049l`);
+      console.error(e);
+      process.exit(1);
+    });
+  }
+  const onResize = () => {
     relayout();
     draw();
-  });
-  if (process.stdin.isTTY) process.stdin.setRawMode(true);
-  process.stdin.setEncoding('utf8');
-  process.stdin.on('data', (d) => {
+  };
+  out.on('resize', onResize);
+  if (input.isTTY) input.setRawMode(true);
+  input.setEncoding('utf8');
+  const onData = (d) => {
     const keys = d.replace(/\r\n/g, '\r').match(/\x1b\[[0-9;]*[~A-Za-z]|\x1bO[A-Za-z]|\x1b[\r\n\x7f\bbfdz<>]|\x1b|[\s\S]/g) || [];
     for (const k of keys) onKey(k);
-  });
+  };
+  input.on('data', onData);
   // the colour query paused stdin; a paused stream stays paused when a reader attaches
-  process.stdin.resume();
-  setInterval(() => ui.flash && ui.flash.until < Date.now() && ((ui.flash = null), draw()), 1000).unref();
+  input.resume();
+  const ticker = setInterval(() => ui.flash && ui.flash.until < Date.now() && ((ui.flash = null), draw()), 1000);
+  ticker.unref();
+  function close() {
+    input.off('data', onData);
+    out.off('resize', onResize);
+    clearInterval(ticker);
+    if (watching) fs.unwatchFile(annotationsPath(watching));
+  }
   draw();
   await reload();
+  return { close, ui };
 }

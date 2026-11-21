@@ -77,7 +77,8 @@ the old line). Text in the annotations is Markdown.
 ## Development
 
 ```sh
-npm test                          # node --test
+npm test                          # node --test; test/viewer.test.mjs drives the viewer
+                                  # through a fake terminal (keys in, screens out)
 node test/fixture.mjs /tmp/sample [--annotate]  # a sample feature (with annotations) to try fr on
 ```
 

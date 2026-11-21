@@ -1,0 +1,142 @@
+// The viewer driven through a fake terminal: keys in, screens out. Covers what only shows
+// when a person uses it (keys reach the viewer, the review flow, the lens switch).
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { PassThrough, Writable } from 'node:stream';
+import { makeSample, sampleAnnotations } from './fixture.mjs';
+import { runViewer } from '../src/viewer.mjs';
+import { readState } from '../src/state.mjs';
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** A terminal of cols × rows: type() sends keys, screen() is what is shown now. */
+function fakeTerminal(cols = 110, rows = 24) {
+  const input = new PassThrough();
+  Object.assign(input, { isTTY: true, isRaw: false, setRawMode(v) { this.isRaw = v; } });
+  let written = '';
+  const output = new Writable({
+    write(chunk, _enc, cb) {
+      written += chunk;
+      cb();
+    },
+  });
+  Object.assign(output, { isTTY: true, columns: cols, rows });
+  return {
+    input,
+    output,
+    /** Send keys one by one, as a person types them, and let the viewer draw. */
+    async type(...keys) {
+      for (const k of keys) {
+        input.write(k);
+        await sleep(15);
+      }
+    },
+    /** The last frame drawn, as plain lines. */
+    screen() {
+      const frame = written.split('\x1b[H').pop();
+      return frame.replace(/\x1b\[[\d;?]*[A-Za-z]/g, '').split('\r\n');
+    },
+    /** The line the cursor is on, and its row on the screen. */
+    cursor() {
+      const lines = this.screen();
+      const row = lines.findIndex((l) => l.startsWith('▌'));
+      return { row, text: lines[row] ?? '' };
+    },
+    /** The footer's location line (repo/file:line of the cursor). */
+    where() {
+      return this.screen().filter((l) => l.trim()).pop().trim();
+    },
+  };
+}
+
+let top;
+let dir;
+const open = [];
+before(() => {
+  top = fs.mkdtempSync(path.join(os.tmpdir(), 'fr-viewer-'));
+  dir = makeSample(top);
+  fs.mkdirSync(path.join(dir, '.feature-review'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.feature-review', 'annotations.json'), JSON.stringify(sampleAnnotations(), null, 2));
+});
+after(() => {
+  for (const v of open) v.close();
+  fs.rmSync(top, { recursive: true, force: true });
+});
+
+async function viewer(opts = {}) {
+  fs.rmSync(path.join(dir, '.feature-review', 'state.json'), { force: true });
+  const term = fakeTerminal(opts.cols, opts.rows);
+  let exited = null;
+  const v = await runViewer({ dir, highlight: 'none', queryTheme: false, input: term.input, output: term.output, exit: (c) => (exited = c) });
+  open.push(v);
+  return { term, v, exited: () => exited };
+}
+
+test('keys reach the viewer: ? shows the help, q quits', async () => {
+  const { term, exited } = await viewer();
+  assert.match(term.screen()[0], /fr {2}feature {2}reviewed 0\/9 {2}groups/);
+  await term.type('?');
+  assert.ok(term.screen().some((l) => l.includes('fr: feature review')));
+  await term.type('x', 'q');
+  assert.equal(exited(), 0);
+});
+
+test('the review flow: ]u goes to a hunk not reviewed, v marks it and goes on', async () => {
+  const { term } = await viewer();
+  await term.type(']', 'u');
+  assert.match(term.cursor().text, /▾ @@ -0,0 \+1,3 @@/); // group 1's first part: RefundRequest
+  assert.match(term.where(), /gateway\/src\/main\/java\/shop\/gateway\/RefundRequest\.java/);
+  await term.type('v');
+  assert.equal(Object.keys(readState(dir).marks).length, 1);
+  assert.match(term.where(), /RefundController\.java/); // on to the next
+  assert.match(term.screen()[0], /reviewed 1\/9/);
+});
+
+test('tab keeps the cursor on the same line and the same screen row', async () => {
+  const { term } = await viewer({ rows: 24 });
+  await term.type(']', 'u', 'v', 'v'); // on to RefundService's hunk
+  await term.type('j', 'j', 'j', 'j');
+  const before = { where: term.where(), cursor: term.cursor() };
+  assert.match(before.where, /RefundService\.java:[-+]\d+/);
+  await term.type('\t');
+  assert.match(term.screen()[0], /services/);
+  assert.equal(term.where(), before.where);
+  assert.equal(term.cursor().row, before.cursor.row);
+  await term.type('\t');
+  assert.match(term.screen()[0], /groups/);
+  assert.equal(term.where(), before.where);
+});
+
+test('tab on a group heading goes to that group’s first hunk', async () => {
+  const { term } = await viewer();
+  await term.type(']', 'g', ']', 'g'); // group 2: the config
+  assert.match(term.cursor().text, /2 {2}Longer refund timeout/);
+  await term.type('\t');
+  assert.match(term.where(), /gateway\/src\/main\/resources\/application\.yml/);
+});
+
+test('c comments on the line under the cursor', async () => {
+  const { term } = await viewer();
+  await term.type(']', 'u', 'j', 'j');
+  const at = term.where();
+  await term.type('c', ...'Why a record?', '\r');
+  const c = readState(dir).comments;
+  assert.equal(c.length, 1);
+  assert.equal(c[0].text, 'Why a record?');
+  assert.equal(`${c[0].repo}/${c[0].file}:${c[0].side === 'old' ? '-' : '+'}${c[0].line}`, at);
+  assert.ok(term.screen().some((l) => l.includes('Why a record?')));
+});
+
+test('the viewer picks up annotations the agent rewrites', async () => {
+  const { term } = await viewer();
+  const a = sampleAnnotations();
+  a.groups[1].title = 'Timeout and replicas, rewritten';
+  fs.writeFileSync(path.join(dir, '.feature-review', 'annotations.json'), JSON.stringify(a, null, 2));
+  await sleep(1600); // the file is polled every second
+  await term.type(']', 'g', ']', 'g');
+  assert.match(term.cursor().text, /Timeout and replicas, rewritten/);
+  fs.writeFileSync(path.join(dir, '.feature-review', 'annotations.json'), JSON.stringify(sampleAnnotations(), null, 2));
+});
