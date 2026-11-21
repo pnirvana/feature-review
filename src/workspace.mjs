@@ -148,7 +148,14 @@ async function baseRef(dir, name, manifest) {
 async function workingTreeIndex(dir) {
   const real = await gitOut(dir, ['rev-parse', '--path-format=absolute', '--git-path', 'index']);
   const tmp = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'fr-')), 'index');
-  if (real && fs.existsSync(real)) fs.copyFileSync(real, tmp); // keeps the stat cache: add -A only hashes what changed
+  if (real && fs.existsSync(real)) {
+    // keeps the stat cache: add -A only hashes what changed. The copy keeps the index's
+    // mtime too: git rehashes files modified as late as the index was written ("racy
+    // git"), which a fresh mtime would hide (a same-size edit right after a commit).
+    fs.copyFileSync(real, tmp);
+    const st = fs.statSync(real);
+    fs.utimesSync(tmp, st.atime, st.mtime);
+  }
   const env = { GIT_INDEX_FILE: tmp };
   if (!real || !fs.existsSync(real)) await git(dir, ['read-tree', 'HEAD'], { env });
   const add = await git(dir, ['add', '-A', '--', '.'], { env });

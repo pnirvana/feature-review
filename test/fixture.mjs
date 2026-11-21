@@ -1,6 +1,6 @@
 // A sample feature: a parent directory with two service worktrees, each cloned from its
 // own bare "origin", on a feature branch with committed, uncommitted and untracked changes,
-// a rename and a deletion. Used by the tests and by `node test/fixture.mjs <dir>`.
+// a rename and a deletion. Used by the tests and by `node test/fixture.mjs <dir> [--annotate]`.
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -100,6 +100,80 @@ export function makeSample(top) {
   return path.join(top, 'feature');
 }
 
+const RC = 'src/main/java/shop/gateway/RefundController.java';
+const RS = 'src/main/java/shop/refund/RefundService.java';
+const SPEC = 'src/test/groovy/shop/refund/RefundServiceSpec.groovy';
+
+/** Annotations for a fresh sample, as an agent would write them; gateway:H1 is left ungrouped on purpose. */
+export function sampleAnnotations() {
+  return {
+    version: 1,
+    intent: 'Refunds must be **idempotent**: a retried refund with the same key is booked once.\n\n- the gateway sends an idempotency key\n- refund-service books each key once',
+    written: { by: 'sample', at: '2026-11-21T16:00:00Z' },
+    groups: [
+      {
+        id: 'refund-key',
+        title: 'Refunds carry an idempotency key from the gateway to the ledger',
+        why: 'Retries of a refund must not book it twice. The key travels with the request:\n\n1. `RefundRequest` gains `idempotencyKey`\n2. `RefundService.refund` skips a key it has *seen*',
+        requested: 'yes',
+        risk: 'high',
+        risk_signals: ['money', 'public contract', 'deleted check'],
+        parts: [
+          { ref: { hunk: 'gateway:H3' }, role: 'interface', note: 'the request gains the key' },
+          { ref: { repo: 'gateway', file: RC, lines: '4-8' }, role: 'implementation', note: 'the `amount <= 0` check is **gone**' },
+          { ref: { repo: 'refund-service', file: RS, lines: '4-8' }, role: 'implementation', note: 'keys are kept in memory' },
+          { ref: { hunk: 'refund-service:H5' }, role: 'test' },
+        ],
+      },
+      {
+        id: 'config',
+        title: 'Longer refund timeout, one more replica',
+        why: 'Not explained by the intent.',
+        requested: 'unclear',
+        risk: 'medium',
+        parts: [
+          { ref: { repo: 'gateway', file: 'src/main/resources/application.yml', lines: '4' }, role: 'config' },
+          { ref: { repo: 'refund-service', file: 'helm/values.yaml', lines: '1' }, role: 'infra', note: 'the in-memory key set is per replica' },
+        ],
+      },
+      {
+        id: 'cleanup',
+        title: 'Remove the legacy refund path, rename Util',
+        why: 'Legacy is unused since the new path.',
+        requested: 'no',
+        risk: 'low',
+        mechanical: 'deletes an unused class and renames another; no behaviour change',
+        parts: [
+          { ref: { hunk: 'refund-service:H2' }, role: 'implementation' },
+          { ref: { hunk: 'refund-service:H3' }, role: 'implementation' },
+        ],
+      },
+    ],
+    tests: [
+      {
+        ref: { hunk: 'refund-service:H5' },
+        name: 'books a refund once per key',
+        behaviour: 'A refund retried with the same key is booked once.',
+        group: 'refund-key',
+        asserts: 'That ledger.book is called any number of times, with any arguments.',
+        flags: [
+          { kind: 'name-vs-assertion', note: "named 'once' but asserts _ * (any number of calls)" },
+          { kind: 'loosened', refs: [{ repo: 'refund-service', file: SPEC, lines: '11', side: 'old' }] },
+        ],
+      },
+    ],
+    ghosts: [
+      {
+        ref: { path: '../remotes/refund-service-seed', file: RS, lines: '4-6' },
+        because: [{ repo: 'refund-service', file: RS, lines: '4' }],
+        why: 'Another checkout still calls refund(orderId, amount) without a key.',
+        status: 'unclear',
+        found_by: "grep 'refund(' in all repositories",
+      },
+    ],
+  };
+}
+
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const top = process.argv[2];
   if (!top) {
@@ -110,5 +184,10 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     console.error(`${top} is not empty`);
     process.exit(1);
   }
-  console.log(makeSample(path.resolve(top)));
+  const dir = makeSample(path.resolve(top));
+  if (process.argv.includes('--annotate')) {
+    fs.mkdirSync(path.join(dir, '.feature-review'), { recursive: true });
+    fs.writeFileSync(path.join(dir, '.feature-review', 'annotations.json'), JSON.stringify(sampleAnnotations(), null, 2) + '\n');
+  }
+  console.log(dir);
 }

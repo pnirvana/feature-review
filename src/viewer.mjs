@@ -2,10 +2,13 @@
 // reviewed marks per hunk and per file, comments anchored to lines, folding, search, and
 // opening a line in $EDITOR. Keys follow ATF's review viewer where they overlap.
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
 import path from 'node:path';
 import { loadWorkspace } from './workspace.mjs';
 import { readState, update, setMarks, addComment, editComment, deleteComment } from './state.mjs';
-import { buildRows, highlightFiles, fid, unitsOf, isFolded } from './rows.mjs';
+import { buildRows, highlightFiles, fid, unitsOf, readingOrder, groupFoldId, UNGROUPED } from './rows.mjs';
+import { annotationsPath, readAnnotations, checkAnnotations } from './annotations.mjs';
+import { queryColors, applyTheme } from './ui/theme.mjs';
 import { ESC, fit, plain, charWidth, strWidth, segsWidth } from './md/term.mjs';
 import { textField, keyField, fieldText, fieldRows, fieldMode } from './ui/textfield.mjs';
 
@@ -15,25 +18,27 @@ const HELP = [
   'fr: feature review',
   '',
   'j k ↑↓          move                    ctrl-d/u half a page   ctrl-f/b a page   gg G top / end',
-  ']] [[           next / previous file    ]r [r  service',
+  'tab             lens: the agent\'s groups (reading order, riskiest first) or the services',
+  ']] [[           next / previous file    ]g [g  group (services lens: service)',
   ']h [h           next / previous hunk    ]u [u  next / previous hunk not reviewed yet',
   ']c [c           next / previous comment',
-  'v               reviewed: the hunk under the cursor (on a file line: the file), then on to the next',
+  'v               reviewed: the hunk under the cursor (on a file, part or group line: all of it), then on',
   'V               reviewed: the whole file under the cursor (again: not reviewed)',
-  'space           fold the hunk (on a file line: the file)   z  the file   Z  every file',
+  'space           fold the hunk (on a file or group line: that)   z  the file or group   Z  all of them',
   'c               comment on the line under the cursor (on a file or hunk line: the file)',
   'e x             on a comment: edit it / delete it (x twice)',
   'o               open the line in $EDITOR',
   's               layout: auto, split, unified',
-  'r               reload (the worktrees and the review state)',
+  'r               reload (the worktrees and the review state; annotations reload by themselves)',
   '/  n N  esc     search, next / previous match, end the search',
   'q               quit',
   '',
   'Reviewed hunks and files fold away; a mark resets when the hunk changes.',
-  'Marks and comments are kept in <dir>/.feature-review/state.json.',
+  'Marks and comments are kept in <dir>/.feature-review/state.json; the agent\'s annotations',
+  'in annotations.json there (fr check validates them).',
 ];
 
-export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
+export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens = null }) {
   const out = process.stdout;
   const ui = {
     ws: null,
@@ -44,6 +49,9 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
     top: 0,
     fold: new Map(),
     layout,
+    lens, // null: groups when there are annotations
+    ann: null, // checkAnnotations() plus {ann}
+    annError: null,
     search: null,
     input: null,
     flash: null,
@@ -63,10 +71,12 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
   };
 
   // ---------- data ----------
-  const rowKey = (r) => (r ? [r.kind, r.fid ?? r.repo ?? '', r.hunk ?? '', JSON.stringify(r.line ?? null), r.comment ?? ''].join('|') : null);
+  const rowKey = (r) => (r ? [r.kind, r.group ?? '', r.fid ?? r.repo ?? '', r.hunk ?? '', JSON.stringify(r.line ?? null), r.comment ?? ''].join('|') : null);
+  const lensNow = () => (ui.ann?.groups.length ? (ui.lens ?? 'groups') : 'services');
+  const opts = () => ({ width: Math.max(30, W() - 2), layout: ui.layout, fold: ui.fold, hl: ui.hl, lens: lensNow(), ann: ui.ann });
   function relayout(keep = rowKey(ui.rows[ui.cur])) {
     if (!ui.ws) return;
-    ui.rows = buildRows(ui.ws, ui.st, { width: Math.max(30, W() - 2), layout: ui.layout, fold: ui.fold, hl: ui.hl });
+    ui.rows = buildRows(ui.ws, ui.st, opts());
     if (ui.search) ui.search.hits = searchHits(ui.search.q);
     restore(keep);
   }
@@ -75,13 +85,38 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
       let i = ui.rows.findIndex((r) => rowKey(r) === key);
       if (i < 0) {
         // the row is gone (folded, reloaded): the nearest row of the same hunk or file
-        const [, f, h] = key.split('|');
-        i = ui.rows.findIndex((r) => h && r.hunk === h);
-        if (i < 0) i = ui.rows.findIndex((r) => f && r.fid === f);
+        const [, g, f, h] = key.split('|');
+        const inGroup = (r) => !g || r.group === g;
+        i = ui.rows.findIndex((r) => h && r.hunk === h && inGroup(r));
+        if (i < 0) i = ui.rows.findIndex((r) => f && r.fid === f && inGroup(r));
+        if (i < 0) i = ui.rows.findIndex((r) => g && r.group === g);
       }
       if (i >= 0) ui.cur = i;
     }
     ui.cur = Math.max(0, Math.min(ui.cur, ui.rows.length - 1));
+  }
+  async function loadAnnotations(ws) {
+    const { ann, error } = readAnnotations(ws.root);
+    ui.annError = error ?? null;
+    try {
+      ui.ann = ann ? { ann, ...(await checkAnnotations(ann, ws)) } : null;
+    } catch (e) {
+      ui.ann = null;
+      ui.annError = e.message;
+    }
+  }
+  let watching = null;
+  function watchAnnotations(root) {
+    if (watching === root) return;
+    if (watching) fs.unwatchFile(annotationsPath(watching));
+    watching = root;
+    // the agent rewrites the file while the viewer is open: show the new one
+    fs.watchFile(annotationsPath(root), { interval: 1000 }, async () => {
+      if (!ui.ws) return;
+      await loadAnnotations(ui.ws);
+      relayout();
+      flash(ui.annError ? `annotations: ${ui.annError}` : ui.ann ? 'annotations reloaded' : 'annotations removed', ui.annError ? 'red' : 'green');
+    });
   }
   async function reload(note = null) {
     if (ui.loading) return;
@@ -91,6 +126,8 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
     try {
       ws = await loadWorkspace(dir);
       ui.st = readState(ws.root);
+      await loadAnnotations(ws);
+      watchAnnotations(ws.root);
       ui.hl = new Map(); // plain until highlighted: old highlighting may not match the new text
       ui.ws = ws;
       ui.error = null;
@@ -126,13 +163,15 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
     for (const r of ui.ws?.repos ?? []) for (const f of r.files) if (fid(f) === id) return { repo: r, f };
     return null;
   };
-  /** The reviewable units in reading order: [{unit, fid, hunk (key or null)}]. */
-  const order = () => ui.ws.repos.flatMap((r) => r.files.flatMap((f) => (f.hunks.length ? f.hunks.map((h) => ({ unit: h.key, fid: fid(f), hunk: h.key })) : [{ unit: f.key, fid: fid(f), hunk: null }])));
-  /** The units under the cursor: the hunk, or the file on a file line (or a file without hunks). */
+  /** The reviewable units in reading order (the lens's): [{unit, fid, hunk (key or null), group}]. */
+  const order = () => readingOrder(ui.ws, ui.ann, lensNow());
+  const HEADS = ['file', 'part', 'group'];
+  /** The units under the cursor: the hunk, or all of a file, part or group on its line. */
   function unitsAt(r = ui.rows[ui.cur]) {
-    if (!r?.fid) return [];
-    if (r.hunk && r.kind !== 'file') return [r.hunk];
-    const x = fileById(r.fid);
+    if (!r) return [];
+    if (r.hunk && !HEADS.includes(r.kind)) return [r.hunk];
+    if (r.units) return r.units;
+    const x = r.fid && fileById(r.fid);
     return x ? unitsOf(x.f) : [];
   }
   const marked = (k) => Boolean(ui.st.marks[k]);
@@ -147,7 +186,8 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
       [` ${ui.ws.name} `, 'bold'],
       [` reviewed ${done}/${all.length}`, all.length && done === all.length ? 'green bold' : ''],
       ...(ui.st.comments.length ? [[`  ${ui.st.comments.length} comment${ui.st.comments.length === 1 ? '' : 's'}`, 'magenta']] : []),
-      [`  ${ui.layout}`, 'dim'],
+      [`  ${lensNow()} · ${ui.layout}`, 'dim'],
+      ...(ui.annError ? [['  annotations unreadable', 'red']] : ui.ann?.errors.length ? [[`  annotations: ${ui.ann.errors.length} error${ui.ann.errors.length === 1 ? '' : 's'}`, 'red']] : []),
       ...(ui.loading ? [['  reading…', 'dim']] : ui.highlighting ? [['  highlighting…', 'dim']] : []),
     ];
   }
@@ -158,7 +198,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
     const l = r.line && typeof r.line === 'object' ? `:${r.line.side === 'old' ? '-' : '+'}${r.line.n}` : '';
     return `${x.repo.name}/${x.f.file}${l}`;
   }
-  const KEYS = 'j/k move  ]] file  ]u not reviewed  v reviewed  space fold  c comment  o editor  s layout  / search  ? help  q quit';
+  const KEYS = 'tab lens  j/k move  ]] file  ]u not reviewed  v reviewed  space fold  c comment  o editor  s layout  / search  ? help  q quit';
   function footer() {
     const w = W();
     if (ui.input) {
@@ -238,7 +278,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
   }
 
   // ---------- moving ----------
-  const nonEmpty = (r) => r && r.segs.length && segsWidth(r.segs) > 0;
+  const nonEmpty = (r) => r && !r.spacer && r.segs.length && segsWidth(r.segs) > 0;
   function move(d) {
     let i = ui.cur;
     const step = Math.sign(d) || 1;
@@ -254,26 +294,37 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
     for (let i = ui.cur + dir; i >= 0 && i < ui.rows.length; i += dir) if (pred(ui.rows[i], i)) return void (ui.cur = i);
     flash(none, 'dim');
   }
-  const isUnitStart = (r) => r.kind === 'hunk' || (r.kind === 'file' && fileById(r.fid)?.f.hunks.length === 0);
+  const isUnitStart = (r) => r.kind === 'hunk' || (r.kind === 'blank' && r.units?.length);
 
   /** The next (or previous) unit not reviewed, in reading order: unfold it and go there. */
   function nextUnreviewed(dir = 1, fromRow = ui.cur) {
     const all = order();
-    let r = ui.rows[fromRow];
-    // where the cursor is in reading order: its hunk, its file, or the nearest unit row above
+    const groupOf = (r) => (r.group === UNGROUPED ? null : (r.group ?? null));
+    const sameGroup = (u, r) => lensNow() !== 'groups' || u.group === groupOf(r);
+    // where the cursor is in reading order: its hunk, else the first unit of its file, part
+    // or group (just before it, going down), else the nearest such row above
     let at = -1;
     for (let i = fromRow; i >= 0 && at < 0; i--) {
-      r = ui.rows[i];
-      if (r.hunk && r.kind !== 'file') at = all.findIndex((u) => u.unit === r.hunk);
-      else if (r.fid) at = all.findIndex((u) => u.fid === r.fid) - (dir > 0 ? 1 : 0);
+      const r = ui.rows[i];
+      if (r.hunk && !HEADS.includes(r.kind)) {
+        at = all.findIndex((u) => u.unit === r.hunk && sameGroup(u, r));
+        if (at < 0) at = all.findIndex((u) => u.unit === r.hunk);
+      } else if (r.units?.length) {
+        const first = all.findIndex((u) => r.units.includes(u.unit) && sameGroup(u, r));
+        if (first >= 0) at = first - (dir > 0 ? 1 : 0);
+      }
     }
     const seq = dir > 0 ? all.slice(at + 1) : all.slice(0, Math.max(0, at)).reverse();
     const u = seq.find((x) => !marked(x.unit));
     if (!u) return flash(all.every((x) => marked(x.unit)) ? 'everything is reviewed' : dir > 0 ? 'nothing below left to review' : 'nothing above left to review', all.every((x) => marked(x.unit)) ? 'green' : 'dim');
     ui.fold.set(u.fid, false);
     if (u.hunk) ui.fold.set(u.hunk, false);
+    const groups = lensNow() === 'groups';
+    if (groups) ui.fold.set(groupFoldId(u.group ?? UNGROUPED), false);
     relayout();
-    const i = ui.rows.findIndex((x) => (u.hunk ? x.kind === 'hunk' && x.hunk === u.hunk : x.kind === 'file' && x.fid === u.fid));
+    const from = groups ? Math.max(0, ui.rows.findIndex((x) => x.kind === 'group' && x.group === (u.group ?? UNGROUPED))) : 0;
+    let i = ui.rows.findIndex((x, k) => k >= from && (u.hunk ? x.kind === 'hunk' && x.hunk === u.hunk : x.units?.includes(u.unit) && ['file', 'blank'].includes(x.kind)));
+    if (i < 0) i = ui.rows.findIndex((x) => (u.hunk ? x.kind === 'hunk' && x.hunk === u.hunk : x.fid === u.fid));
     if (i >= 0) ui.cur = i;
     // scroll so the whole hunk shows, when it fits
     if (i < 0 || !u.hunk) return;
@@ -288,7 +339,9 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
     // the rows with everything unfolded give the comments' reading order
     const open = new Map();
     for (const r of ui.ws.repos) for (const f of r.files) [fid(f), ...f.hunks.map((h) => h.key)].forEach((k) => open.set(k, false));
-    const full = buildRows(ui.ws, ui.st, { width: Math.max(30, W() - 2), layout: ui.layout, fold: open, hl: new Map() });
+    for (const g of ui.ann?.groups ?? []) open.set(groupFoldId(g.g.id), false);
+    open.set(groupFoldId(UNGROUPED), false);
+    const full = buildRows(ui.ws, ui.st, { ...opts(), fold: open, hl: new Map() });
     const cur = ui.rows[ui.cur];
     let at = full.findIndex((r) => rowKey(r) === rowKey(cur));
     if (at < 0) at = full.findIndex((r) => (cur?.hunk ? r.hunk === cur.hunk : cur?.fid ? r.fid === cur.fid : false));
@@ -298,6 +351,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
     const [r] = hit;
     if (r.fid) ui.fold.set(r.fid, false);
     if (r.hunk) ui.fold.set(r.hunk, false);
+    if (r.group) ui.fold.set(groupFoldId(r.group), false);
     relayout();
     const i = ui.rows.findIndex((x) => x.comment === r.comment);
     if (i >= 0) ui.cur = i;
@@ -310,37 +364,48 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
     if (!keys.length) return flash('no change here: v marks the hunk under the cursor', 'yellow');
     const on = !keys.every(marked);
     if (!save((st) => setMarks(st, keys, on))) return;
-    // the default fold follows the mark again
+    // the default fold follows the mark again: a hunk, file or group folds once all of it is reviewed
     for (const k of keys) ui.fold.delete(k);
-    // a file folds away once all of it is reviewed
-    if (r.fid && (wholeFile || r.kind === 'file' || (on && unitsOf(fileById(r.fid).f).every((k) => keys.includes(k) || marked(k))))) ui.fold.delete(r.fid);
+    if (r.fid && (!on || unitsOf(fileById(r.fid).f).every(marked))) ui.fold.delete(r.fid);
+    const g = r.group && ui.rows.find((x) => x.kind === 'group' && x.group === r.group);
+    if (g && (!on || g.units.every(marked))) ui.fold.delete(groupFoldId(r.group));
     const n = `${keys.length} ${keys.length === 1 ? 'hunk' : 'hunks'}`;
+    relayout(rowKey(r));
     if (on) {
-      relayout(rowKey(r));
       nextUnreviewed(1, ui.cur);
       flash(`${n} reviewed`);
-    } else {
-      relayout(rowKey(r));
-      flash(`${n} no longer reviewed`, 'yellow');
-    }
+    } else flash(`${n} no longer reviewed`, 'yellow');
   }
-  function toggleFold(level) {
+  /** The header row a fold toggles: the group, file or hunk the cursor is in (level: 'outer' skips the hunk). */
+  function foldHead(level) {
     const r = ui.rows[ui.cur];
-    if (!r?.fid) return;
-    const x = fileById(r.fid);
-    if (!x) return;
-    const fileLevel = level === 'file' || r.kind === 'file' || !r.hunk;
-    const id = fileLevel ? r.fid : r.hunk;
-    const reviewed = fileLevel ? unitsOf(x.f).every(marked) : marked(r.hunk);
-    ui.fold.set(id, !isFolded(id, reviewed, ui.fold));
-    relayout(fileLevel ? `file|${r.fid}||null|` : `hunk|${r.fid}|${r.hunk}|null|`);
+    if (!r) return null;
+    const find = (pred) => {
+      for (let i = ui.cur; i >= 0; i--) if (pred(ui.rows[i])) return ui.rows[i];
+      return null;
+    };
+    if (['group', 'file', 'hunk'].includes(r.kind) && !(level === 'outer' && r.kind === 'hunk')) return r;
+    if (level !== 'outer' && r.hunk && r.kind !== 'part') return find((x) => x.kind === 'hunk' && x.hunk === r.hunk);
+    if (lensNow() === 'groups' && r.group) {
+      // in "not grouped", files fold; in a group, the group
+      if (r.group === UNGROUPED && r.fid) return find((x) => x.kind === 'file' && x.fid === r.fid);
+      return find((x) => x.kind === 'group' && x.group === r.group);
+    }
+    return r.fid ? find((x) => x.kind === 'file' && x.fid === r.fid) : null;
+  }
+  const foldId = (h) => (h.kind === 'group' ? groupFoldId(h.group) : h.kind === 'file' ? h.fid : h.hunk);
+  function toggleFold(level) {
+    const h = foldHead(level);
+    if (!h) return;
+    ui.fold.set(foldId(h), !h.folded);
+    relayout(rowKey(h));
   }
   function foldAll() {
-    const files = ui.ws.repos.flatMap((r) => r.files);
-    const anyOpen = files.some((f) => !isFolded(fid(f), unitsOf(f).every(marked), ui.fold));
-    for (const f of files) ui.fold.set(fid(f), anyOpen);
-    const r = ui.rows[ui.cur];
-    relayout(r?.fid ? `file|${r.fid}||null|` : null);
+    const heads = ui.rows.filter((x) => x.kind === (lensNow() === 'groups' ? 'group' : 'file'));
+    const anyOpen = heads.some((x) => !x.folded);
+    for (const h of heads) ui.fold.set(foldId(h), anyOpen);
+    const h = foldHead('outer');
+    relayout(h ? rowKey(h) : null);
   }
 
   function ask({ label, multiline = true, value = '', onSubmit }) {
@@ -444,11 +509,11 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
     if (p === 'g' && k === 'g') (ui.cur = 0), move(0);
     else if (p === ']' || p === '[') {
       const dir = p === ']' ? 1 : -1;
-      if (k === p) jump((r) => r.kind === 'file', dir);
+      if (k === p) jump((r) => r.kind === 'file' || r.kind === 'part', dir);
       else if (k === 'h') jump(isUnitStart, dir);
       else if (k === 'u') nextUnreviewed(dir);
       else if (k === 'c') nextComment(dir);
-      else if (k === 'r') jump((r) => r.kind === 'repo', dir);
+      else if (k === 'g' || k === 'r') jump((r) => r.kind === 'group' || r.kind === 'repo', dir);
     } else if (k === 'g' || k === ']' || k === '[') return void (ui.pending = k);
     else if (k === 'j' || k === '\x1b[B' || k === '\x0e') move(1);
     else if (k === 'k' || k === '\x1b[A' || k === '\x10') move(-1);
@@ -462,7 +527,14 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
       ui.cur = k === 'n' ? (hs.find((i) => i > ui.cur) ?? hs[0]) : ([...hs].reverse().find((i) => i < ui.cur) ?? hs[hs.length - 1]);
     } else if (k === 'v' || k === 'V') return mark(k === 'V');
     else if (k === ' ') toggleFold();
-    else if (k === 'z') toggleFold('file');
+    else if (k === 'z') toggleFold('outer');
+    else if (k === '\t') {
+      if (!ui.ann?.groups.length) return flash(ui.annError ? `annotations: ${ui.annError}` : `no groups: the agent writes them to ${annotationsPath(ui.ws.root)}`, 'yellow');
+      // stay on the same hunk (or file) in the other lens
+      const r = ui.rows[ui.cur];
+      ui.lens = lensNow() === 'groups' ? 'services' : 'groups';
+      relayout(r?.hunk ? rowKey({ kind: 'hunk', fid: r.fid, hunk: r.hunk }) : r?.fid ? rowKey({ kind: 'file', fid: r.fid }) : null);
+    }
     else if (k === 'Z') foldAll();
     else if (k === 'c') return comment();
     else if (k === 'e') return editAt();
@@ -489,6 +561,11 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
   }
 
   // ---------- start ----------
+  // the terminal's colours, before anything else reads stdin (FR_BACKGROUND wins: a fixed choice)
+  if (!process.env.FR_BACKGROUND) {
+    const colors = await queryColors().catch(() => null);
+    if (colors) applyTheme(colors);
+  }
   out.write(`${ESC}?1049h${ESC}?25l${ESC}?2004h${ESC}2J`);
   process.on('SIGTERM', quit);
   process.on('SIGHUP', quit);
@@ -507,6 +584,8 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto' }) {
     const keys = d.replace(/\r\n/g, '\r').match(/\x1b\[[0-9;]*[~A-Za-z]|\x1bO[A-Za-z]|\x1b[\r\n\x7f\bbfdz<>]|\x1b|[\s\S]/g) || [];
     for (const k of keys) onKey(k);
   });
+  // the colour query paused stdin; a paused stream stays paused when a reader attaches
+  process.stdin.resume();
   setInterval(() => ui.flash && ui.flash.until < Date.now() && ((ui.flash = null), draw()), 1000).unref();
   draw();
   await reload();

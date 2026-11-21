@@ -4,10 +4,11 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { makeSample } from './fixture.mjs';
+import { makeSample, sampleAnnotations } from './fixture.mjs';
 import { parsePatch, hunkKey, discover, loadWorkspace, units, MANIFEST } from '../src/workspace.mjs';
 import { readState, update, setMarks, addComment, locate } from '../src/state.mjs';
-import { buildRows } from '../src/rows.mjs';
+import { buildRows, readingOrder, UNGROUPED } from '../src/rows.mjs';
+import { checkAnnotations, unitIds, stamp, staleness, resolver } from '../src/annotations.mjs';
 import { plain } from '../src/md/term.mjs';
 
 let top;
@@ -164,7 +165,177 @@ test('rows: reviewed hunks fold away, comments sit below their line', async () =
 
 test('fr --print runs end to end', () => {
   const out = execFileSync(process.execPath, [path.resolve('bin/fr.mjs'), dir, '--print', '--plain', '--width', '100']).toString();
-  assert.match(out, /━━ gateway feature\/idempotent-refunds base origin\/main/);
-  assert.match(out, /R src\/main\/java\/shop\/refund\/Util\.java → src\/main\/java\/shop\/refund\/MoneyUtil\.java/);
+  assert.match(out, /gateway {3}feature\/idempotent-refunds\n *base origin\/main/);
+  assert.match(out, /R {2}src\/main\/java\/shop\/refund\/Util\.java → src\/main\/java\/shop\/refund\/MoneyUtil\.java/);
   assert.match(out, /- {9}1 \* ledger\.book\('o1', -5\)|1 \* ledger\.book/);
+});
+
+// ---------- annotations ----------
+
+const clone = (x) => JSON.parse(JSON.stringify(x));
+
+test('hunk ids: per repository, in file order; a file without hunks has one too', async () => {
+  const ws = await loadWorkspace(dir);
+  const ids = unitIds(ws);
+  assert.deepEqual(ids.filter((u) => u.repo === 'gateway').map((u) => [u.id, path.basename(u.f.file)]), [
+    ['gateway:H1', 'IdempotencyKey.java'],
+    ['gateway:H2', 'RefundController.java'],
+    ['gateway:H3', 'RefundRequest.java'],
+    ['gateway:H4', 'application.yml'],
+  ]);
+  const rename = ids.find((u) => u.f.status === 'R');
+  assert.equal(rename.h, null);
+  assert.equal(rename.unit, rename.f.key);
+});
+
+test('citations: hunk ids, ranges on either side, unchanged code, other checkouts', async () => {
+  const ws = await loadWorkspace(dir);
+  const { resolve } = resolver(ws);
+  const h3 = await resolve({ hunk: 'gateway:H3' });
+  assert.equal(h3.ok, true);
+  assert.equal(h3.units.length, 1);
+  const range = await resolve({ repo: 'refund-service', file: 'src/main/java/shop/refund/RefundService.java', lines: '5' });
+  assert.equal(range.units.length, 1);
+  const old = await resolve({ repo: 'refund-service', file: 'src/test/groovy/shop/refund/RefundServiceSpec.groovy', lines: '11', side: 'old' });
+  assert.equal(old.code[0].s.trim(), "1 * ledger.book('o1', -5)");
+  // a range in a changed file maps to the hunk it overlaps
+  const yml = await resolve({ repo: 'gateway', file: 'src/main/resources/application.yml', lines: '1' });
+  assert.deepEqual([yml.ok, yml.units.length], [true, 1]);
+  const other = await resolve({ path: '../remotes/refund-service-seed', file: 'src/main/java/shop/refund/Legacy.java', lines: '4' });
+  assert.deepEqual([other.ok, other.external, other.code[0].s.trim()], [true, true, '// old refund path']);
+  for (const [ref, msg] of [
+    [{ hunk: 'gateway:H9' }, /no hunk gateway:H9/],
+    [{ repo: 'nope', file: 'x', lines: '1' }, /no worktree "nope"/],
+    [{ repo: 'gateway', file: 'missing.java', lines: '1' }, /does not exist/],
+    [{ repo: 'gateway', file: 'src/main/resources/application.yml', lines: '1-99' }, /at most 60 lines/],
+    [{ repo: 'gateway', file: 'src/main/resources/application.yml', lines: '9' }, /has 4 lines/],
+    [{ repo: 'gateway', file: 'src/main/resources/application.yml', lines: 'x' }, /use "N" or "N-M"/],
+    [{ repo: 'refund-service', file: 'src/main/java/shop/refund/Legacy.java', lines: '1' }, /deleted: use side old/],
+  ])
+    assert.match((await resolve(ref)).error, msg);
+});
+
+test('fr check: the sample is valid; coverage, enums and broken citations are reported', async () => {
+  const ws = await loadWorkspace(dir);
+  const ok = await checkAnnotations(sampleAnnotations(), ws);
+  assert.deepEqual(ok.errors, []);
+  assert.deepEqual(ok.ungrouped, ['gateway:H1']);
+  assert.match(ok.warnings.map((w) => w.msg).join('\n'), /1 hunk\(s\) in no group: gateway:H1/);
+
+  const bad = clone(sampleAnnotations());
+  bad.groups[0].risk = 'huge';
+  bad.groups[1].id = bad.groups[0].id;
+  bad.groups[0].parts[0].ref = { hunk: 'gateway:H99' };
+  bad.tests[0].flags[0].kind = 'odd';
+  bad.ghosts[0].because = [];
+  bad.groups[2].parts.push({ ref: { hunk: 'refund-service:H4' }, role: 'test' });
+  const res = await checkAnnotations(bad, ws);
+  const at = res.errors.map((e) => e.at);
+  for (const want of ['groups[0].risk', 'groups[1].id', 'groups[0].parts[0].ref', 'tests[0].flags[0].kind', 'ghosts[0].because']) assert.ok(at.includes(want), `${want} in ${at.join(', ')}`);
+  assert.deepEqual(res.multi, [{ id: 'refund-service:H4', groups: ['refund-key', 'cleanup'] }]);
+});
+
+test('stamp and staleness: new commits and changed hunks are noticed', async () => {
+  const t2 = fs.mkdtempSync(path.join(os.tmpdir(), 'fr-stale-'));
+  scratch.push(t2);
+  const d2 = makeSample(t2);
+  let ws = await loadWorkspace(d2);
+  const stamped = stamp(sampleAnnotations(), ws);
+  assert.ok(stamped.written.heads.gateway);
+  assert.ok(stamped.written.hunks['refund-service:H5']);
+  assert.deepEqual(staleness(stamped, ws), []);
+  // the agent edits a cited hunk without committing
+  const spec = path.join(d2, 'refund-service', 'src/test/groovy/shop/refund/RefundServiceSpec.groovy');
+  fs.writeFileSync(spec, fs.readFileSync(spec, 'utf8').replace('_ * ledger.book(_, _)', "1 * ledger.book('o1', -5)"));
+  ws = await loadWorkspace(d2);
+  const why = staleness(stamped, ws).join('\n');
+  assert.match(why, /refund-service's change differs/);
+  assert.match(why, /hunks changed since the annotations were written: refund-service:H5/);
+});
+
+test('groups lens: reading order by group, ungrouped hunks last and never hidden', async () => {
+  const ws = await loadWorkspace(dir);
+  const ann = sampleAnnotations();
+  const checked = { ann, ...(await checkAnnotations(ann, ws)) };
+  const order = readingOrder(ws, checked, 'groups');
+  assert.deepEqual([...new Set(order.map((u) => u.group))], ['refund-key', 'config', 'cleanup', null]);
+  assert.equal(order.length, unitIds(ws).length);
+  const rows = buildRows(ws, { marks: {}, comments: [] }, { width: 100, tint: false, lens: 'groups', ann: checked });
+  const t = text(rows);
+  assert.match(t, /▾ 1 {2}Refunds carry an idempotency key.*\n *HIGH {3}money · public contract · deleted check/);
+  assert.match(t, /▸ 3 {2}Remove the legacy refund path.*\n.*claimed mechanical, not verified/); // mechanical: folded
+  assert.match(t, /Not grouped *\n *1 hunk no group explains/);
+  const ug = rows.findIndex((r) => r.kind === 'group' && r.group === UNGROUPED);
+  assert.ok(rows.slice(ug).some((r) => r.kind === 'file' && r.fid.endsWith('IdempotencyKey.java')));
+  // a part on unchanged lines shows those lines
+  ann.groups[1].parts.push({ ref: { path: '../remotes/refund-service-seed', file: 'src/main/java/shop/refund/Legacy.java', lines: '3-4' }, role: 'docs' });
+  const c2 = { ann, ...(await checkAnnotations(ann, ws)) };
+  const rows2 = buildRows(ws, { marks: {}, comments: [] }, { width: 100, tint: false, lens: 'groups', ann: c2 });
+  assert.match(rows2.filter((r) => r.kind === 'cited').map((r) => plain(r.segs)).join('\n'), /4 +\/\/ old refund path/);
+});
+
+// ---------- theme ----------
+
+test('theme: colours from the terminal, light or dark, with fallbacks', async () => {
+  const { parseRgb, fallbackColors, makeStyles, isLight } = await import('../src/ui/theme.mjs');
+  assert.deepEqual(parseRgb('rgb:efef/f1f1/f5f5'), [239, 241, 245]);
+  assert.deepEqual(parseRgb('rgb:1e/66/f5'), [30, 102, 245]);
+  assert.equal(isLight(fallbackColors({ FR_BACKGROUND: 'light' }).bg), true);
+  assert.equal(isLight(fallbackColors({ FR_BACKGROUND: '#1e1e2e' }).bg), false);
+  assert.equal(isLight(fallbackColors({ COLORFGBG: '0;15' }).bg), true);
+  assert.equal(isLight(fallbackColors({}).bg), false);
+  // the tints are mixed from the theme's own background and colours
+  const latte = makeStyles({ bg: [239, 241, 245], blue: [30, 102, 245] });
+  assert.equal(latte.band, '48;2;219;227;245');
+  const mocha = makeStyles({ bg: [30, 30, 46] });
+  assert.notEqual(mocha.band, latte.band);
+  assert.match(latte.riskhigh, /^1;38;2;239;241;245;48;2;/); // badge text in the background colour
+});
+
+// ---------- Markdown in annotations ----------
+
+test('annotation prose is Markdown: rendered, not shown as markup', async () => {
+  const ws = await loadWorkspace(dir);
+  const ann = sampleAnnotations();
+  const rows = buildRows(ws, { marks: {}, comments: [] }, { width: 100, tint: false, lens: 'groups', ann: { ann, ...(await checkAnnotations(ann, ws)) } });
+  const t = text(rows);
+  assert.match(t, /Refunds must be idempotent: a retried/); // **bold**: no asterisks
+  assert.match(t, /• the gateway sends an idempotency key/); // a list
+  assert.match(t, /1\. RefundRequest gains idempotencyKey/); // `code` in a numbered list
+  assert.match(t, /the amount <= 0 check is gone/);
+  assert.doesNotMatch(t, /\*\*|`/);
+});
+
+test('fr check warns about pasted code in prose, not about short snippets', async () => {
+  const ws = await loadWorkspace(dir);
+  const ann = sampleAnnotations();
+  ann.groups[0].why = 'Short:\n\n```java\nseen.add(key);\n```\n\nLong:\n\n```java\na();\nb();\nc();\nd();\n```';
+  const res = await checkAnnotations(ann, ws);
+  const w = res.warnings.filter((x) => /pasted code/.test(x.msg));
+  assert.equal(w.length, 1);
+  assert.equal(w[0].at, 'groups[0].why');
+  assert.match(w[0].msg, /4 lines of pasted code/);
+  assert.deepEqual(res.errors, []);
+});
+
+test("bat's theme follows a light or dark terminal unless BAT_THEME is set", async () => {
+  const { setBatBackground, batThemeNow } = await import('../src/md/highlight.mjs');
+  setBatBackground(true, {});
+  assert.equal(batThemeNow(), 'GitHub');
+  setBatBackground(true, { BAT_THEME_LIGHT: 'Catppuccin Latte' });
+  assert.equal(batThemeNow(), 'Catppuccin Latte');
+  setBatBackground(false, {});
+  assert.equal(batThemeNow(), null); // bat's default
+  setBatBackground(true, { BAT_THEME: 'Nord' });
+  assert.equal(batThemeNow(), null); // bat reads BAT_THEME itself
+});
+
+test('the intent shows on top in both lenses', async () => {
+  const ws = await loadWorkspace(dir);
+  const ann = sampleAnnotations();
+  const checked = { ann, ...(await checkAnnotations(ann, ws)) };
+  for (const lens of ['groups', 'services']) {
+    const t = text(buildRows(ws, { marks: {}, comments: [] }, { width: 100, tint: false, lens, ann: checked }));
+    assert.match(t, /Intent *\n *Refunds must be idempotent/, lens);
+  }
 });

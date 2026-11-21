@@ -7,6 +7,19 @@ import path from 'node:path';
 import { parseAnsi, untab } from './term.mjs';
 
 let batOk;
+let batTheme = null;
+/**
+ * The bat theme for a light or dark terminal: BAT_THEME wins (bat reads it itself), else
+ * BAT_THEME_LIGHT / BAT_THEME_DARK, else GitHub on light and bat's default on dark.
+ * (feature-review: bat runs without a terminal, so it cannot tell by itself.)
+ */
+export function setBatBackground(light, env = process.env) {
+  if (env.BAT_THEME) batTheme = null;
+  else batTheme = light ? (env.BAT_THEME_LIGHT || 'GitHub') : (env.BAT_THEME_DARK || null);
+}
+const themeArgs = () => (batTheme ? ['--theme', batTheme] : []);
+/** The theme bat is given (null: bat's own choice). */
+export const batThemeNow = () => batTheme;
 /** Is bat installed? (checked once) */
 export function hasBat() {
   if (batOk === undefined) {
@@ -125,7 +138,7 @@ export function highlight(lines, name, mode = 'auto') {
     const text = lines.join('\n') + '\n';
     const key = `${name}\0${text}`;
     if (!batCache.has(key)) {
-      const args = ['--color=always', '--style=plain', '--paging=never', '--tabs=4'];
+      const args = ['--color=always', '--style=plain', '--paging=never', '--tabs=4', ...themeArgs()];
       args.push(...(String(name).includes('.') ? ['--file-name', String(name)] : ['--language', String(name)]));
       let res = null;
       try {
@@ -154,7 +167,7 @@ export function highlightAsync(lines, name, mode = 'auto') {
   if (!lines.length) return Promise.resolve([]);
   if (mode === 'none' || mode === false) return Promise.resolve(lines.map((l) => [[untab(l), '']]));
   if (!((mode === 'auto' || mode === 'bat') && hasBat() && name)) return Promise.resolve(builtinHighlight(lines, family(name)));
-  const args = ['--color=always', '--style=plain', '--paging=never', '--tabs=4'];
+  const args = ['--color=always', '--style=plain', '--paging=never', '--tabs=4', ...themeArgs()];
   args.push(...(String(name).includes('.') ? ['--file-name', String(name)] : ['--language', String(name)]));
   return new Promise((resolve) => {
     const p = execFile('bat', args, { timeout: 60_000, maxBuffer: 256 << 20 }, (err, stdout) => {

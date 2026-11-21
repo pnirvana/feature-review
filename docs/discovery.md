@@ -241,6 +241,9 @@ Built in this order, each step usable on its own:
 
    Every claim cites file and lines (the tool extracts the code from git; nothing is
    pasted).
+
+   **Specified in `docs/annotations.md` (2026-11-21).** Built: `fr hunks`, `fr check`,
+   groups in the viewer.
 3. **Cheap objective signals:**
    - verified mechanical changes;
    - tests changed together with code;
