@@ -7,7 +7,8 @@
 //   FooSpec, test_foo, …); a change to code without one to its test is noted, and so is
 //   an existing test changed in the same change as its code ("made to match the code?").
 import path from 'node:path';
-import { git } from './workspace.mjs';
+import { git, fileTexts } from './workspace.mjs';
+import { testSignals } from './asserts.mjs';
 import { unitIds } from './annotations.mjs';
 
 // ---------- mechanical ----------
@@ -191,7 +192,7 @@ export async function computeSignals(ws) {
     if (m.moved === m.of) {
       mechanical.add(h.key);
       add(units, h.key, { kind: 'moved', label: 'MOVED', text: whereText.trim(), level: 'fact' });
-    } else add(units, h.key, { kind: 'partly-moved', label: null, text: `${m.moved} of ${m.of} changed lines moved${whereText}`, level: 'info' });
+    } else add(units, h.key, { kind: 'partly-moved', label: 'PARTLY MOVED', text: `${m.moved} of ${m.of} changed lines${whereText}`, level: 'info' });
   }
   for (const r of repos)
     for (const f of r.files)
@@ -221,10 +222,21 @@ export async function computeSignals(ws) {
         const tests = testsOf.get(subjectKey(stem(f.file))) ?? [];
         const touched = tests.filter((t) => changed.has(t));
         const names = (xs) => xs.map((t) => path.basename(t)).join(', ');
-        if (!tests.length) add(files, fk(f), { kind: 'no-test', label: null, text: 'no test found', level: 'info' });
-        else if (!touched.length) add(files, fk(f), { kind: 'test-unchanged', label: null, text: `its test not changed: ${names(tests)}`, level: 'warn' });
-        else add(files, fk(f), { kind: 'test-changed', label: null, text: `test changed: ${names(touched)}`, level: 'info' });
+        if (!tests.length) add(files, fk(f), { kind: 'no-test', label: 'NO TEST', text: 'none found by name', level: 'info' });
+        else if (!touched.length) add(files, fk(f), { kind: 'test-unchanged', label: 'TEST NOT CHANGED', text: names(tests), level: 'warn' });
+        else add(files, fk(f), { kind: 'test-changed', label: 'TEST CHANGED', text: names(touched), level: 'info' });
       }
+
+      // weakened tests: assertions removed or loosened, tests disabled, … (src/asserts.mjs)
+      await Promise.all(
+        r.files
+          .filter((t) => testSubject(t.file) !== undefined && t.status !== 'D' && t.hunks.length)
+          .map(async (t) => {
+            const ts = testSignals(t, await fileTexts(r, t));
+            for (const [k, list] of ts.units) for (const x of list) if (!mechanical.has(k)) add(units, k, x);
+            for (const x of ts.file) add(files, fk(t), x);
+          }),
+      );
 
       for (const t of r.files) {
         const s = testSubject(t.file);
@@ -234,12 +246,17 @@ export async function computeSignals(ws) {
           add(files, fk(t), { kind: 'test-deleted', label: 'TEST DELETED', text: code.length ? `${code.map((f) => path.basename(f.file)).join(', ')} changes too` : '', level: 'warn' });
           continue;
         }
-        if (code.length) add(files, fk(t), { kind: 'tests', label: null, text: `tests ${code.map((f) => path.basename(f.file)).join(', ')} (changed too)`, level: 'info' });
+        if (code.length) add(files, fk(t), { kind: 'tests', label: 'TESTS', text: `${code.map((f) => path.basename(f.file)).join(', ')}, changed too`, level: 'info' });
         if (!code.length) continue;
         // an existing test's lines changed or removed, with its code: the expected values may have been made to fit
         for (const h of t.hunks)
-          if (h.lines.some(([x, line]) => x === '-' && significant(line)) && !mechanical.has(h.key))
-            add(units, h.key, { kind: 'test-with-code', label: 'EXISTING TEST CHANGED', text: `with its code (${code.map((f) => path.basename(f.file)).join(', ')}): which side is right?`, level: 'warn' });
+          if (h.lines.some(([x, line]) => x === '-' && significant(line)) && !mechanical.has(h.key)) {
+            const withCode = `with its code (${code.map((f) => path.basename(f.file)).join(', ')}): which side is right?`;
+            // an expected value changed already says what changed: it gets the code beside it
+            const exp = units.get(h.key)?.find((x) => x.kind === 'expected-changed');
+            if (exp) exp.text += `, ${withCode}`;
+            else add(units, h.key, { kind: 'test-with-code', label: 'EXISTING TEST CHANGED', text: withCode, level: 'warn' });
+          }
       }
     }),
   );

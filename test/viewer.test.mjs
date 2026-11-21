@@ -116,7 +116,7 @@ test('v when the next hunk does not fit: its heading goes to the top', async () 
 
 test('v on a reviewed hunk: not reviewed again, the cursor stays on the same line', async () => {
   const { term } = await viewer({ rows: 24 });
-  await term.type(']', 'u', 'v', 'k', 'k', 'k'); // back on RefundRequest's folded hunk
+  await term.type(']', 'u', 'v', '[', 'h'); // back on RefundRequest's folded hunk
   const before = term.cursor();
   assert.match(before.text, /@@ -0,0 \+1,3 @@ +✓ reviewed/);
   await term.type('v');

@@ -4,7 +4,7 @@
 // FR_BACKGROUND (light | dark | #rrggbb), else COLORFGBG, else dark.
 //
 // The result is applied to STYLE (src/md/term.mjs) as named styles, so rows keep using
-// names: band, bandalt, guide, guidealt, role, riskhigh, riskmedium, risklow, fact, the diff
+// names: band, bandalt, guide, guidealt, role, riskhigh, riskmedium, risklow, fact, factsoft, factbar, the diff
 // tints addbg, delbg, addword, delword, addfg, delfg, filler, and code and link for the
 // Markdown of annotations. It also picks bat's theme for a light or dark terminal.
 import { STYLE } from '../md/term.mjs';
@@ -104,6 +104,9 @@ export function makeStyles(colors) {
     risklow: `1;${fg(c.bg)};${bg(c.green)}`,
     // what the tool checked itself, apart from the agent's judgement
     fact: `1;${fg(c.bg)};${bg(c.blue)}`,
+    // a fact that is only information: the same hue, no fill
+    factsoft: `1;${fg(c.blue)}`,
+    factbar: fg(mix(c.bg, c.blue, 0.75)),
     // the diff, as diffview tints it: soft line backgrounds, the changed part stronger
     addbg: bg(mix(c.bg, c.green, 0.16 * k)),
     delbg: bg(mix(c.bg, c.red, 0.16 * k)),

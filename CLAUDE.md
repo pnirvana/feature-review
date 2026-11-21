@@ -11,8 +11,9 @@ approaches and the open questions (§13a; §13 records what is decided). The fir
 version (§12) is built step by step; step 1, the viewer (`fr`, see README.md), is done.
 Step 2, the annotation file (`docs/annotations.md`), is built: `fr hunks`, `fr check`,
 the groups lens, ghosts and test intents in place, the overview (`m`). Step 3, the cheap
-objective signals (`src/signals.mjs`), is under way: verified mechanical changes and
-tests paired with code are built; assertion heuristics and JaCoCo coverage are next.
+objective signals (`src/signals.mjs`, `src/asserts.mjs`), is under way: verified
+mechanical changes, tests paired with code and assertion heuristics are built; JaCoCo
+coverage of the changed lines is next.
 
 `npm test` runs the tests; `node test/fixture.mjs <dir>` builds a sample feature.
 

@@ -49,26 +49,41 @@ fr ~/work/idempotent-refunds --print | less -R
 
 ### What fr checks itself
 
-Facts the tool verifies, apart from the agent's words; blue badges mark them. Only git is
-needed.
+Facts the tool verifies, apart from the agent's words: blue badges, in a block under the
+hunk or file they are about. A filled badge with yellow text asks you to look; an outlined
+one is information. Colour says who speaks (blue fr, the agent's notes their own, your
+comments magenta), not the kind of fact. Only git is needed.
 
 - **Verified mechanical**, folded like reviewed hunks (a glance, then `v`):
   - `WHITESPACE ONLY`: re-indented or re-wrapped, the same words in the same order. In
     Python, YAML and Makefiles a change of indentation is not whitespace.
   - `MOVED`: every changed line is part of a block of 3 lines (or a whole short block, at
     least 20 letters or digits) removed or added elsewhere in the change, in any file or
-    service; the title says where to (`moved to gateway:H4`). A hunk partly moved says how
-    much: `5 of 9 changed lines moved`.
+    service, with where to (`moved to gateway:H4`). A hunk partly moved says how much:
+    `PARTLY MOVED 5 of 9 changed lines`.
   - `RENAMED ONLY`: a file renamed with its content unchanged.
 
   A group the agent calls mechanical says how many of its hunks are not verified.
 - **Tests and code**, paired by name in the same repository (`FooTest`, `FooTests`,
   `FooIT`, `FooSpec`, `test_foo.py`, `foo_test.py`, `foo.spec.ts`):
-  - on a changed source file: `test changed: FooTest.java`, `its test not changed:
-    FooTest.java` or `no test found` (verified mechanical changes need none);
+  - on a changed source file: `TEST CHANGED`, `TEST NOT CHANGED` or `NO TEST`, with the
+    test's name (verified mechanical changes need none); on a test file: `TESTS` and its
+    code, when that changed too;
   - `EXISTING TEST CHANGED` on a hunk that changes or removes lines of an existing test
     whose code changes too: the expected values may have been made to fit the code;
   - `TEST DELETED`.
+- **Weakened tests**, read from each changed test file before and after (JUnit, AssertJ,
+  Mockito, Spock, pytest, unittest, Jest-style; line based, so a hint, not a proof):
+  - `ASSERTION REMOVED` (when the file has fewer assertions, not merely moved ones; the
+    file says `FEWER ASSERTIONS 5 → 3`);
+  - `ASSERTION LOOSENED`: an exact check traded for a weaker one (`assertEquals →
+    assertNotNull`, `times → atLeast`), or values for wildcards (`any()`, Spock's `_`);
+  - `EXPECTED VALUE CHANGED`: the same assertion with another value (`10 → 20`), and
+    with which code when that changed too;
+  - `TEST DISABLED` (`@Disabled`, `@Ignore`, `@pytest.mark.skip`, `it.skip`, assumptions),
+    `CATCHES ANY EXCEPTION`, `LONGER TIMEOUT`;
+  - `ASSERTS NOTHING` or `ONLY CHECKS NOTHING IS THROWN` on a new test, with its name, to
+    hold against what it claims.
 
 `fr hunks` lists the signals too (`mechanical: true` in `--json`), so the agent need not
 explain what fr has verified.

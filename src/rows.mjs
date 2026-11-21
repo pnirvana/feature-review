@@ -284,12 +284,13 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
       [`@@ -${h.oldStart},${h.oldCount} +${h.newStart},${h.newCount} @@`, 'cyan dim'],
       ...(h.header ? [[' ' + h.header, 'dim']] : []),
       ...(hr ? [['  ✓ reviewed', 'green']] : []),
-      ...signalSegs(ctx.sig.units.get(h.key)),
       ...(note ? [[`  ${note}`, 'yellow']] : []),
       ...(hf && here.length ? [[`  ${plural(here.length, 'comment')}`, 'magenta']] : []),
       ...(hf && noteCount(ctx, h.key) ? [[`  ${hideNotes(ctx, [h.key])}`, 'cyan']] : []),
     ],
   });
+  // what fr found, one per line: done with once the hunk is reviewed and folded
+  if (!(hr && hf)) rows.push(...signalRows(ctx.sig.units.get(h.key), { ...base, hunk: h.key }, { after: !hf }));
   if (hf) return rows;
   const lines = h.lines.map(([t, s, o, n]) => ({ t, s, old: o, new: n, hunk: h.key }));
   const code = codeView({ groups: [{ lines }], name: f.file, width, layout: f.status === 'A' || f.status === 'D' ? 'unified' : layout, tint, signs: !tint, segsFor: segsForFile(ctx, f) }).map((x) => ({ ...x, ...base, kind: 'code' }));
@@ -329,15 +330,26 @@ const wholeFileRow = (ctx, f, base) => {
   return { kind: 'blank', ...base, units: [f.key], segs: sigs?.length ? signalSegs(sigs) : [[`  ${f.binary ? 'binary file' : f.status === 'R' ? 'renamed, content unchanged' : 'no content changes'}`, 'dim']] };
 };
 
-/** Signals (src/signals.mjs) as title segments: the tool's badge, then its text. */
-function signalSegs(list = []) {
+/** Signals (src/signals.mjs) as segments: the tool's badge, then its text. */
+function signalSegs(list = [], labelWidth = 0) {
   const out = [];
   for (const s of list) {
     out.push(['  ', '']);
-    if (s.label) out.push([` ${s.label} `, 'fact']);
-    if (s.text) out.push([`${s.label ? ' ' : ''}${s.text}`, s.level === 'warn' ? 'yellow' : 'dim']);
+    out.push([` ${s.label} `, s.level === 'info' ? 'factsoft' : 'fact']);
+    if (s.text) out.push([`${' '.repeat(Math.max(0, labelWidth - s.label.length))}  ${s.text}`, s.level === 'warn' ? 'yellow' : 'dim']);
   }
   return out;
+}
+/**
+ * Signals as a block under the title they belong to: one per row, a bar down the left, an
+ * empty row above, and below when more follows (`after`).
+ */
+const signalRows = (list = [], base = {}, { after = true } = {}) =>
+  list.length ? [spacer(base), ...list.map((s) => ({ kind: 'note', ...base, segs: [['  ', ''], ['┃', 'factbar'], ...signalSegs([s], Math.max(...list.map((x) => x.label.length)))] })), ...(after ? [spacer(base)] : [])] : [];
+/** A file's signals under its title: done with once the file is reviewed and folded. */
+function fileSignalRows(ctx, f, { folded, units = unitsOf(f), base = {} }) {
+  if (folded && units.every(ctx.marked)) return [];
+  return signalRows(ctx.sig.files.get(fid(f)), { repo: f.repo, fid: fid(f), ...base }, { after: !folded });
 }
 
 /** A file's title row: status, path, size, uncommitted, reviewed. */
@@ -370,8 +382,6 @@ function fileTitle(ctx, f, { folded, units = unitsOf(f), base = {} }) {
       ...(mech && folded ? [['  ', ''], [' MECHANICAL ', 'fact'], [` verified: ${[...new Set(units.flatMap((u) => ctx.sig.units.get(u) ?? []).filter((s) => s.level === 'fact').map((s) => [s.label.toLowerCase(), s.kind === 'moved' ? s.text : ''].join(' ').trim()))].join(', ')}`, 'dim']] : []),
       ...(folded && n ? [[`  ${plural(n, 'comment')}`, 'magenta']] : []),
       ...(folded && noteCount(ctx, units) ? [[`  ${hideNotes(ctx, units)}`, 'cyan']] : []),
-      // what the tool found about its tests: done with once the file is reviewed
-      ...(reviewed && folded ? [] : signalSegs(ctx.sig.files.get(fid(f)))),
     ],
   };
 }
@@ -437,7 +447,7 @@ function servicesLens(ctx) {
       const base = { repo: r.name, fid: fid(f) };
       const folded = isFolded(fid(f), unitsOf(f).every(ctx.settled), fold);
       rows.push(spacer());
-      rows.push(fileTitle(ctx, f, { folded }));
+      rows.push(fileTitle(ctx, f, { folded }), ...fileSignalRows(ctx, f, { folded }));
       if (folded) continue;
       rows.push(...fileComments(ctx, f, base));
       rows.push(...hunksRows(ctx, f.hunks.length ? f.hunks.map((h) => ({ f, h, base })) : [{ f, h: null, base }]));
@@ -542,9 +552,9 @@ function groupsLens(ctx) {
           [refText(res, p?.ref), res?.ok ? 'bold' : 'red bold'],
           ...(res?.hunkId ? [[`  ${res.hunkId}`, 'dim']] : []),
           ...(f?.dirty ? [['  ● uncommitted', 'yellow']] : []),
-          ...(f ? signalSegs(ctx.sig.files.get(fid(f))) : []),
         ],
       });
+      if (f) body.push(...fileSignalRows(ctx, f, { folded: false, base: pbase }));
       if (p?.note) body.push(...mdRows(p.note, inner.width, pbase, { extra: 'dim' }));
       if (res && !res.ok) body.push({ kind: 'note', ...pbase, segs: [[`does not resolve: ${res.error}`, 'red']] });
       if (!res?.ok) continue;
@@ -584,7 +594,7 @@ function groupsLens(ctx) {
         const base = { group: UNGROUPED, repo: f.repo, fid: fid(f) };
         const ff = isFolded(fid(f), us.every(ctx.settled), fold);
         body.push(spacer(base));
-        body.push(fileTitle(inner, f, { folded: ff, units: us, base: { group: UNGROUPED } }));
+        body.push(fileTitle(inner, f, { folded: ff, units: us, base: { group: UNGROUPED } }), ...fileSignalRows(ctx, f, { folded: ff, units: us, base }));
         if (ff) continue;
         body.push(...fileComments(inner, f, base));
         body.push(...hunksRows(inner, us.map((u) => ({ f, h: f.hunks.find((x) => x.key === u) ?? null, base }))));

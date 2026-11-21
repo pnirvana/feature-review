@@ -108,7 +108,8 @@ test('a re-wrapped method is whitespace only; an indentation change in Python is
 });
 
 test('tests and code: an existing test changed with its code; code whose test did not change', () => {
-  assert.deepEqual(sig(idOf('src/test/java/a/TaxTest.java')[0]), ['test-with-code']);
+  assert.deepEqual(sig(idOf('src/test/java/a/TaxTest.java')[0]), ['expected-changed']); // 10 → 20, with its code
+  assert.match(ws.signals.units.get(unitIds(ws).find((u) => u.f.file === 'src/test/java/a/TaxTest.java').unit)[0].text, /^10 → 20, with its code \(Tax\.java\)/);
   assert.deepEqual(fileSig('src/main/java/a/Tax.java'), ['test-changed']);
   assert.deepEqual(fileSig('src/test/java/a/TaxTest.java'), ['tests']);
   assert.deepEqual(fileSig('src/main/java/a/Price.java'), ['test-unchanged']);
@@ -124,7 +125,66 @@ test('the review shows the signals, and folds verified mechanical hunks', () => 
   const text = rows.map((r) => plain(r.segs)).join('\n');
   assert.match(text, /Orders\.java .*MECHANICAL {2}verified: moved/);
   assert.match(text, /Format\.java .*MECHANICAL {2}verified: whitespace only/);
-  assert.match(text, /EXISTING TEST CHANGED {2}with its code \(Tax\.java\)/);
+  assert.match(text, /EXPECTED VALUE CHANGED +10 → 20, with its code \(Tax\.java\)/);
   assert.doesNotMatch(text, /long sum = 0/); // the moved method is folded away
   assert.match(text, /return x \/ 5/); // the rest is not
+});
+
+// ---------- assertion heuristics ----------
+
+import { testSignals, assertionLines } from '../src/asserts.mjs';
+import { parsePatch } from '../src/workspace.mjs';
+
+/** The signals of a test file changed from `old` to `now`: → [kind: text] of every hunk, then the file's. */
+function weakening(file, old, now) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'fr-asserts-'));
+  const a = path.join(dir, 'a');
+  const b = path.join(dir, 'b');
+  fs.writeFileSync(a, old);
+  fs.writeFileSync(b, now);
+  let diff = '';
+  try {
+    execFileSync('git', ['diff', '--no-index', '-U3', a, b], { env: ENV });
+  } catch (e) {
+    diff = e.stdout.toString(); // exit 1: they differ
+  }
+  fs.rmSync(dir, { recursive: true, force: true });
+  const [f] = parsePatch(diff);
+  f.hunks.forEach((h, i) => (h.key = `H${i + 1}`));
+  const res = testSignals({ file, hunks: f.hunks }, { old, new: now });
+  return [...[...res.units.values()].flat(), ...res.file].map((s) => `${s.kind}: ${s.text}`);
+}
+const java = (body) => `class PriceTest {\n${body}}\n`;
+
+test('JUnit: an exact check traded for a weaker one; a removed assertion', () => {
+  assert.deepEqual(weakening('PriceTest.java', java('  @Test\n  void total() {\n    assertEquals(20, price.total());\n  }\n'), java('  @Test\n  void total() {\n    assertNotNull(price.total());\n  }\n')), ['loosened: assertEquals → assertNotNull']);
+  const r = weakening('PriceTest.java', java('  @Test\n  void total() {\n    var t = price.total();\n    assertEquals(20, t);\n    assertTrue(t > 0);\n  }\n'), java('  @Test\n  void total() {\n    var t = price.total();\n    assertTrue(t > 0);\n  }\n'));
+  assert.deepEqual(r, ['assertion-removed: 1 fewer here: assertEquals(20, t);', 'fewer-assertions: 2 → 1']);
+});
+
+test('Mockito and Spock: values traded for wildcards; an expected value changed', () => {
+  assert.deepEqual(weakening('PriceTest.java', java('  void t() {\n    verify(ledger).book("o1", 5);\n  }\n'), java('  void t() {\n    verify(ledger).book(anyString(), anyLong());\n  }\n')), ['loosened: 0 → 2 wildcards (any value matches): verify(ledger).book(anyString(), anyLong());']);
+  const spec = (then) => `import spock.lang.Specification\nclass PriceSpec extends Specification {\n  def 'books it'() {\n    when:\n    service.run()\n\n    then:\n    ${then}\n  }\n}\n`;
+  assert.deepEqual(weakening('PriceSpec.groovy', spec("1 * ledger.book('o1', 5)"), spec("1 * ledger.book('o1', 7)")), ['expected-changed: 5 → 7']);
+  // the when: block is not an assertion: changing it is not a removed assertion
+  assert.equal(assertionLines(spec('x == 1'), 'spock').size, 1);
+});
+
+test('disabled, a catch-all, a longer timeout, a new test that asserts nothing', () => {
+  assert.deepEqual(weakening('PriceTest.java', java('  @Test\n  void a() { assertEquals(1, a()); }\n'), java('  @Disabled\n  @Test\n  void a() { assertEquals(1, a()); }\n')), ['disabled: @Disabled']);
+  assert.deepEqual(weakening('test_price.py', 'def test_a():\n    assert a() == 1\n', '@pytest.mark.skip\ndef test_a():\n    assert a() == 1\n'), ['disabled: @pytest.mark.skip']);
+  assert.deepEqual(
+    weakening('PriceTest.java', java('  @Test\n  void a() {\n    try { run(); } catch (IllegalStateException e) { fail(); }\n  }\n'), java('  @Test\n  void a() {\n    try { run(); } catch (Exception e) { fail(); }\n  }\n')),
+    ['catch-all: try { run(); } catch (Exception e) { fail(); }'],
+  );
+  assert.deepEqual(weakening('PriceTest.java', java('  @Timeout(2)\n  @Test\n  void a() { assertEquals(1, a()); }\n'), java('  @Timeout(10)\n  @Test\n  void a() { assertEquals(1, a()); }\n')), ['timeout: 2 → 10']);
+  assert.deepEqual(
+    weakening('PriceTest.java', java('  @Test\n  void a() { assertEquals(1, a()); }\n'), java('  @Test\n  void a() { assertEquals(1, a()); }\n\n  @Test\n  void rejectsARefundOverTheTotal() {\n    assertDoesNotThrow(() -> refund(500));\n  }\n')),
+    ['asserts-nothing: “rejectsARefundOverTheTotal”'],
+  );
+  assert.deepEqual(weakening('test_price.py', 'def test_a():\n    assert a() == 1\n', 'def test_a():\n    assert a() == 1\n\ndef test_b():\n    b()\n'), ['asserts-nothing: “test_b”']);
+});
+
+test('a stronger test raises nothing', () => {
+  assert.deepEqual(weakening('PriceTest.java', java('  @Test\n  void a() {\n    assertNotNull(a());\n  }\n'), java('  @Test\n  void a() {\n    assertEquals(1, a());\n    assertEquals(2, b());\n  }\n')), []);
 });
