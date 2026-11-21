@@ -8,16 +8,22 @@ import { readState } from '../src/state.mjs';
 import { buildRows, highlightFiles } from '../src/rows.mjs';
 import { annotationsPath, readAnnotations, checkAnnotations, unitIds, hunkRange, stamp } from '../src/annotations.mjs';
 import { fit, plain } from '../src/md/term.mjs';
+import { loadConfig, initConfig, SETTINGS } from '../src/config.mjs';
+import { configureTheme } from '../src/ui/theme.mjs';
 
 const USAGE = `usage: fr [dir] [options]          the viewer (or --print)
        fr hunks [dir] [--json]      the hunks with their ids, for citing them
        fr check [dir] [--stamp]     check the annotation file
+       fr config [init]             the settings in effect; init writes the settings file
 
 <dir> (default: the current directory) is a parent directory with one git worktree
 per service, or a single worktree. Each worktree is compared from its merge base with
 origin's default branch to its working tree (uncommitted and untracked files
-included). Override the base in <dir>/feature-review.json: {"base": "origin/x"} or
-{"base": {"<worktree>": "origin/x"}}.
+included). Override the base in <dir>/feature-review.toml: base = "origin/x", or per
+worktree: [base] <worktree> = "origin/x".
+
+Settings (vi mode, layout, theme, editor, …): ~/.config/feature-review/config.toml;
+fr config shows them, fr config init writes the file with every option explained.
 
 The annotation file is <dir>/.feature-review/annotations.json (docs/annotations.md).
 fr check resolves every citation and exits 1 on errors; --stamp then records the
@@ -28,8 +34,9 @@ options:
   --plain           with --print: no colours
   --width N         with --print: the width (default: the terminal's, or 120)
   --layout L        auto | split | unified (default auto: split from 110 columns)
-  --lens L          groups | services (default: groups when there are annotations)
+  --lens L          groups | services (default groups, when there are annotations)
   --highlight M     auto | bat | builtin | none (default auto: bat if installed)
+                    (these three override the settings file)
   --json            with hunks and check: JSON output
   -h, --help        this help
 
@@ -43,9 +50,9 @@ try {
       print: { type: 'boolean' },
       plain: { type: 'boolean' },
       width: { type: 'string' },
-      layout: { type: 'string', default: 'auto' },
+      layout: { type: 'string' },
       lens: { type: 'string' },
-      highlight: { type: 'string', default: 'auto' },
+      highlight: { type: 'string' },
       json: { type: 'boolean' },
       stamp: { type: 'boolean' },
       help: { type: 'boolean', short: 'h' },
@@ -61,16 +68,16 @@ if (o.help) {
   process.exit(0);
 }
 const pos = [...args.positionals];
-const cmd = ['hunks', 'check'].includes(pos[0]) ? pos.shift() : 'view';
-if (!['auto', 'split', 'unified'].includes(o.layout)) {
-  console.error(`fr: --layout ${o.layout}: use auto, split or unified`);
+const cmd = ['hunks', 'check', 'config'].includes(pos[0]) ? pos.shift() : 'view';
+let cfg;
+try {
+  cfg = loadConfig({ flags: { layout: o.layout, lens: o.lens, highlight: o.highlight } });
+} catch (e) {
+  console.error(`fr: ${e.message}`);
   process.exit(2);
 }
-if (o.lens && !['groups', 'services'].includes(o.lens)) {
-  console.error(`fr: --lens ${o.lens}: use groups or services`);
-  process.exit(2);
-}
-const dir = path.resolve(pos[0] ?? '.');
+const set = cfg.values;
+const dir = path.resolve(cmd === 'config' ? '.' : (pos[0] ?? '.'));
 // piped into head or less that quits early: not an error
 process.stdout.on('error', (e) => process.exit(e.code === 'EPIPE' ? 0 : 1));
 
@@ -137,7 +144,24 @@ async function check() {
   process.exit(ok ? 0 : 1);
 }
 
+function config() {
+  if (pos[0] === 'init') {
+    const { file, written } = initConfig();
+    console.log(written ? `wrote ${file}: every option is commented out, uncomment what you change` : `${file} exists: not changed`);
+    return;
+  }
+  if (pos[0]) throw new Error(`fr config ${pos[0]}: use fr config, or fr config init`);
+  console.log(`${cfg.file}${cfg.exists ? '' : '  (not there: fr config init writes it)'}\n`);
+  const w = Math.max(...SETTINGS.map((s) => s.key.length));
+  for (const s of SETTINGS) {
+    const src = cfg.sources[s.key];
+    console.log(`${s.key.padEnd(w)}  ${JSON.stringify(set[s.key]).padEnd(12)}  ${src === cfg.file ? 'from the file' : src === 'default' ? 'default' : src === 'flag' ? 'from the command line' : `from ${src}`}`);
+  }
+}
+
 async function view() {
+  const askTerminal = configureTheme(set);
+  const lensWanted = o.lens ?? (cfg.sources['viewer.lens'] === 'default' ? null : set['viewer.lens']);
   if (o.print || !process.stdout.isTTY || !process.stdin.isTTY) {
     const ws = await loadWorkspace(dir);
     const st = readState(ws.root);
@@ -145,18 +169,18 @@ async function view() {
     const { ann, error } = readAnnotations(ws.root);
     if (error) console.error(`fr: ${error}`);
     const checked = ann ? await checkAnnotations(ann, ws) : null;
-    const hl = await highlightFiles(ws, o.plain ? 'none' : o.highlight);
-    const lens = o.lens ?? (checked?.groups.length ? 'groups' : 'services');
-    const rows = buildRows(ws, st, { width, layout: o.layout, hl, tint: !o.plain, lens, ann: checked && { ann, ...checked } });
+    const hl = await highlightFiles(ws, o.plain ? 'none' : set['viewer.highlight']);
+    const lens = lensWanted ?? (checked?.groups.length ? 'groups' : 'services');
+    const rows = buildRows(ws, st, { width, layout: set['viewer.layout'], hl, tint: !o.plain, lens, ann: checked && { ann, ...checked } });
     process.stdout.write(rows.map((r) => (o.plain ? plain(r.segs).trimEnd() : fit(r.segs, width))).join('\n') + '\n');
   } else {
     const { runViewer } = await import('../src/viewer.mjs');
-    await runViewer({ dir, layout: o.layout, highlight: o.highlight, lens: o.lens });
+    await runViewer({ dir, layout: set['viewer.layout'], highlight: set['viewer.highlight'], lens: lensWanted, queryTheme: askTerminal, viMode: set['viewer.vi_mode'], editor: set['viewer.editor'] });
   }
 }
 
 try {
-  await { hunks, check, view }[cmd]();
+  await { hunks, check, config, view }[cmd]();
 } catch (e) {
   console.error(`fr: ${e.message}`);
   process.exit(1);

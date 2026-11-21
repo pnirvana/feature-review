@@ -70,7 +70,7 @@ async function viewer(opts = {}) {
   fs.rmSync(path.join(dir, '.feature-review', 'state.json'), { force: true });
   const term = fakeTerminal(opts.cols, opts.rows);
   let exited = null;
-  const v = await runViewer({ dir, highlight: 'none', queryTheme: false, input: term.input, output: term.output, exit: (c) => (exited = c) });
+  const v = await runViewer({ dir, highlight: 'none', queryTheme: false, viMode: opts.viMode ?? false, input: term.input, output: term.output, exit: (c) => (exited = c) });
   open.push(v);
   return { term, v, exited: () => exited };
 }
@@ -128,6 +128,14 @@ test('c comments on the line under the cursor', async () => {
   assert.equal(c[0].text, 'Why a record?');
   assert.equal(`${c[0].repo}/${c[0].file}:${c[0].side === 'old' ? '-' : '+'}${c[0].line}`, at);
   assert.ok(term.screen().some((l) => l.includes('Why a record?')));
+});
+
+test('vi mode in the comment field: esc to normal mode, vi edits, ⏎ saves', async () => {
+  const { term } = await viewer({ viMode: true });
+  await term.type(']', 'u', 'j', 'c', ...'Why a record here?', '\x1b');
+  assert.ok(term.screen().some((l) => l.includes('-- NORMAL --')));
+  await term.type('0', 'c', 'w', ...'How', '\x1b', '\r');
+  assert.deepEqual(readState(dir).comments.map((c) => c.text), ['How a record here?']);
 });
 
 test('the viewer picks up annotations the agent rewrites', async () => {

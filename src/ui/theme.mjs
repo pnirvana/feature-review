@@ -116,12 +116,24 @@ export function makeStyles(colors) {
   };
 }
 
-/** Apply a theme's styles to STYLE. → the styles applied. */
+let batEnv = process.env;
+/** Apply a theme's styles to STYLE, and pick bat's theme for it. → the styles applied. */
 export function applyTheme(colors) {
   const s = makeStyles(colors);
   Object.assign(STYLE, s);
-  setBatBackground(isLight(colors.bg));
+  setBatBackground(isLight(colors.bg), batEnv);
   return s;
+}
+
+/**
+ * The theme from the settings (src/config.mjs): bat's light and dark themes, and the
+ * background when it is fixed. → true when the terminal should still be asked (auto).
+ */
+export function configureTheme(values, env = process.env) {
+  batEnv = { BAT_THEME: env.BAT_THEME, BAT_THEME_LIGHT: values['theme.bat_light'], BAT_THEME_DARK: values['theme.bat_dark'] };
+  const bg = values['theme.background'];
+  applyTheme(fallbackColors({ COLORFGBG: env.COLORFGBG, ...(bg !== 'auto' ? { FR_BACKGROUND: bg } : {}) }));
+  return bg === 'auto';
 }
 
 // until a theme is applied: the fallback (so --print and tests never see a missing name)

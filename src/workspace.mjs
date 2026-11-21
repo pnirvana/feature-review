@@ -10,9 +10,10 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { readConfigFile } from './toml.mjs';
 
 export const STATE_DIR = '.feature-review';
-export const MANIFEST = 'feature-review.json';
+export const MANIFEST = 'feature-review.toml';
 
 export function git(cwd, args, { env = {}, input = null } = {}) {
   return new Promise((resolve) => {
@@ -101,14 +102,11 @@ export function parsePatch(text) {
 
 // ---------- discovery ----------
 
+/** The feature's own settings: <dir>/feature-review.toml (else the older feature-review.json). */
 export function readManifest(root) {
-  const p = path.join(root, MANIFEST);
-  if (!fs.existsSync(p)) return {};
-  try {
-    return JSON.parse(fs.readFileSync(p, 'utf8'));
-  } catch (e) {
-    throw new Error(`${p}: ${e.message}`);
-  }
+  const { data, file, error } = readConfigFile(root, 'feature-review');
+  if (error) throw new Error(`${file}: ${error}`);
+  return data;
 }
 
 const isWorktree = (dir) => fs.existsSync(path.join(dir, '.git'));

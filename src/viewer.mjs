@@ -36,13 +36,14 @@ const HELP = [
   'Reviewed hunks and files fold away; a mark resets when the hunk changes.',
   'Marks and comments are kept in <dir>/.feature-review/state.json; the agent\'s annotations',
   'in annotations.json there (fr check validates them).',
+  'Settings (vi mode in the comment field, layout, theme, editor): fr config.',
 ];
 
 /**
  * Open the viewer. input and output are the terminal (tests pass a fake one); exit ends
  * the process on q. → {close, ui} once the change is loaded and highlighted.
  */
-export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens = null, input = process.stdin, output = process.stdout, exit = (code) => process.exit(code), queryTheme = true }) {
+export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens = null, input = process.stdin, output = process.stdout, exit = (code) => process.exit(code), queryTheme = true, viMode = false, editor = '' }) {
   const out = output;
   const ui = {
     ws: null,
@@ -460,8 +461,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
   }
 
   function ask({ label, multiline = true, value = '', onSubmit }) {
-    const vi = ['1', 'true', 'yes', 'on'].includes(String(process.env.FR_VI_MODE || '').toLowerCase());
-    ui.input = { label, multiline, onSubmit, field: textField(value, { multiline, vi }) };
+    ui.input = { label, multiline, onSubmit, field: textField(value, { multiline, vi: viMode }) };
     draw();
   }
   function comment() {
@@ -521,10 +521,10 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     let line = 1;
     if (r.line && typeof r.line === 'object') line = r.line.side === 'new' ? r.line.n : (x.f.hunks.find((h) => h.key === r.hunk)?.newStart ?? 1);
     else if (r.hunk) line = x.f.hunks.find((h) => h.key === r.hunk)?.newStart ?? 1;
-    const editor = process.env.VISUAL || process.env.EDITOR || 'vi';
+    const cmd = editor || 'vi';
     out.write(`${ESC}?2004l${ESC}?25h${ESC}?1049l`);
     if (input.isTTY) input.setRawMode(false);
-    spawnSync('sh', ['-c', `${editor} "$@"`, 'sh', `+${line}`, path.join(x.repo.dir, x.f.file)], { stdio: 'inherit' });
+    spawnSync('sh', ['-c', `${cmd} "$@"`, 'sh', `+${line}`, path.join(x.repo.dir, x.f.file)], { stdio: 'inherit' });
     if (input.isTTY) input.setRawMode(true);
     out.write(`${ESC}?1049h${ESC}?25l${ESC}?2004h${ESC}2J`);
     draw();
@@ -612,8 +612,8 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
   }
 
   // ---------- start ----------
-  // the terminal's colours, before anything else reads stdin (FR_BACKGROUND wins: a fixed choice)
-  if (queryTheme && !process.env.FR_BACKGROUND) {
+  // the terminal's colours, before anything else reads stdin (unless the background is set)
+  if (queryTheme) {
     const colors = await queryColors({ input, output }).catch(() => null);
     if (colors) applyTheme(colors);
   }

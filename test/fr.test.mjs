@@ -105,7 +105,7 @@ test('the manifest overrides the base', async () => {
   const gw = path.join(dir, 'gateway');
   const env = { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_AUTHOR_NAME: 't', GIT_AUTHOR_EMAIL: 't@x.invalid', GIT_COMMITTER_NAME: 't', GIT_COMMITTER_EMAIL: 't@x.invalid' };
   execFileSync('git', ['tag', 'feature-base', 'HEAD'], { cwd: gw, env });
-  fs.writeFileSync(path.join(dir, MANIFEST), JSON.stringify({ base: { gateway: 'feature-base' } }));
+  fs.writeFileSync(path.join(dir, MANIFEST), '# the gateway starts from a feature branch\n[base]\ngateway = "feature-base"\n');
   try {
     const ws = await loadWorkspace(dir);
     const r = ws.repos.find((x) => x.name === 'gateway');

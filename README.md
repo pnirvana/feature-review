@@ -8,10 +8,26 @@ Needs only git and Node 25 or later; `bat` is used for highlighting when it is t
 
 Colours come from the terminal's theme (light or dark, e.g. any Catppuccin flavour): the
 viewer asks the terminal for its background and palette and mixes every tint from them.
-Where the terminal does not answer (some multiplexers), set `FR_BACKGROUND=light`,
-`dark` or `#rrggbb`. Code highlighting is bat's: `BAT_THEME` if set, else
-`BAT_THEME_LIGHT` / `BAT_THEME_DARK` for the terminal's background, else `GitHub` on a
-light one and bat's default on a dark one.
+
+## Settings
+
+`~/.config/feature-review/config.toml` (or under `$XDG_CONFIG_HOME`). `fr config init`
+writes it with every option commented out and explained; `fr config` shows the settings
+in effect and where each comes from.
+
+| setting | default | |
+|---|---|---|
+| `viewer.vi_mode` | `false` | vi keys in the comment field (`$FR_VI_MODE`, else `$ATF_VI_MODE`, override it) |
+| `viewer.layout` | `"auto"` | `split`, `unified`, or split from 110 columns |
+| `viewer.lens` | `"groups"` | the lens to open in when there are annotations |
+| `viewer.highlight` | `"auto"` | `bat` when installed, `builtin`, `none` |
+| `viewer.editor` | `""` | the command `o` opens a line with; `""`: `$VISUAL`, else `$EDITOR`, else `vi` |
+| `theme.background` | `"auto"` | ask the terminal, or `light`, `dark`, `"#rrggbb"` where it does not answer (some multiplexers); `$FR_BACKGROUND` overrides it |
+| `theme.bat_light` | `"GitHub"` | bat's theme on a light background (`$BAT_THEME`, when set, wins for both) |
+| `theme.bat_dark` | `""` | bat's theme on a dark one (`""`: bat's default) |
+
+A command-line flag (`--layout`, `--lens`, `--highlight`) wins over the environment,
+which wins over the file. A wrong value or an unknown key is an error that says where.
 
 ```sh
 git clone <this repository> ~/feature-review
@@ -25,8 +41,8 @@ fr ~/work/idempotent-refunds --print | less -R
 
 - Each worktree from its **merge base with origin's default branch** (`origin/HEAD`) to
   its **working tree**: uncommitted and untracked files are part of the change and marked
-  `● uncommitted`. Override the base in `<dir>/feature-review.json`:
-  `{"base": "origin/release"}` or `{"base": {"gateway": "origin/feature-x"}}`.
+  `● uncommitted`. Override the base in `<dir>/feature-review.toml`:
+  `base = "origin/release"`, or per worktree `[base]` with `gateway = "origin/feature-x"`.
 - One heading per service (branch, base, size, uncommitted files, reviewed count), then
   its files and hunks, side by side from 110 columns, unified below.
 - The repositories are only read; the working tree is read through a copy of the index.
