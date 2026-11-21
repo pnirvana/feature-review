@@ -385,3 +385,11 @@ test('findings sit under their line in the diff; the test intent before its code
   const c2 = { ann: a2, ...(await checkAnnotations(a2, ws)) };
   assert.match(text(buildRows(ws, { marks: {}, comments: [] }, { width: 110, tint: false, lens: 'groups', ann: c2 })), /Other notes[\s\S]*UNCHANGED/);
 });
+
+test('side by side: when one side wraps, the other side’s extra row leaves the number column untinted', async () => {
+  const { codeView } = await import('../src/md/render.mjs');
+  const long = 'x'.repeat(120);
+  const rows = codeView({ groups: [{ lines: [{ t: '-', s: 'short()', old: 7, new: null }, { t: '+', s: long, old: null, new: 7 }] }], width: 110, layout: 'split', highlight: 'none' });
+  assert.ok(rows.length > 1, 'the new side wraps');
+  for (const r of rows) assert.ok(!/\b48;|bg\b/.test(r.segs[0][1] ?? '') || r.segs[0][0].trim(), `row ${rows.indexOf(r)}: no tint left of the code: ${JSON.stringify(r.segs[0])}`);
+});

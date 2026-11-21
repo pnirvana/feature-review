@@ -387,8 +387,10 @@ export function codeView({ groups, name = '', width = 100, highlight: mode = 'au
       const h = Math.max(L.length, R.length);
       const anchor = n ?? o;
       for (let y = 0; y < h; y++) {
-        const left = L[y] ?? (o ? [[' '.repeat(half), bgOf(o)]] : [['╱'.repeat(half), 'filler']]);
-        const right = R[y] ?? (n ? [[' '.repeat(half), bgOf(n)]] : [['╱'.repeat(half), 'filler']]);
+        // a side with fewer rows (the other wrapped): its line's tint, not over the number column
+        const blank = (l) => [[' '.repeat(nw), ''], [' '.repeat(half - nw), bgOf(l)]];
+        const left = L[y] ?? (o ? blank(o) : [['╱'.repeat(half), 'filler']]);
+        const right = R[y] ?? (n ? blank(n) : [['╱'.repeat(half), 'filler']]);
         rows.push({ segs: [...left, ['│', 'gray'], ...right], line: lineOf(anchor), at: { old: o?.old ?? null, new: n?.new ?? null }, ...(o && n && o !== n ? { old: o.old } : {}), ...meta(anchor) });
       }
     }
