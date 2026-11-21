@@ -4,7 +4,7 @@
 // FR_BACKGROUND (light | dark | #rrggbb), else COLORFGBG, else dark.
 //
 // The result is applied to STYLE (src/md/term.mjs) as named styles, so rows keep using
-// names: band, bandalt, guide, guidealt, role, riskhigh, riskmedium, risklow, fact, factsoft, factbar, the diff
+// names: band, bandalt, guide, guidealt, role, riskhigh, riskmedium, risklow, fact, factsoft, factbar, agent, agentsoft, agentbar, markfr, markagent, markcomment, the diff
 // tints addbg, delbg, addword, delword, addfg, delfg, filler, and code and link for the
 // Markdown of annotations. It also picks bat's theme for a light or dark terminal.
 import { STYLE } from '../md/term.mjs';
@@ -12,8 +12,8 @@ import { setBatBackground } from '../md/highlight.mjs';
 
 // Catppuccin Mocha and Latte: the fallback palettes for dark and light
 const DEFAULTS = {
-  dark: { bg: [30, 30, 46], fg: [205, 214, 244], red: [243, 139, 168], green: [166, 227, 161], yellow: [249, 226, 175], blue: [137, 180, 250] },
-  light: { bg: [239, 241, 245], fg: [76, 79, 105], red: [210, 15, 57], green: [64, 160, 43], yellow: [223, 142, 29], blue: [30, 102, 245] },
+  dark: { bg: [30, 30, 46], fg: [205, 214, 244], red: [243, 139, 168], green: [166, 227, 161], yellow: [249, 226, 175], blue: [137, 180, 250], magenta: [245, 194, 231], cyan: [148, 226, 213] },
+  light: { bg: [239, 241, 245], fg: [76, 79, 105], red: [210, 15, 57], green: [64, 160, 43], yellow: [223, 142, 29], blue: [30, 102, 245], magenta: [234, 118, 203], cyan: [23, 146, 153] },
 };
 
 export const hex = (s) => {
@@ -50,9 +50,9 @@ export function fallbackColors(env = process.env) {
 
 /**
  * Ask the terminal for its colours: background (OSC 11), foreground (OSC 10), palette red,
- * green, yellow, blue (OSC 4;1..4). Ends at the answer to a device-attributes query, which
+ * green, yellow, blue, magenta, cyan (OSC 4;1..6). Ends at the answer to a device-attributes query, which
  * every terminal sends, or after `timeout` ms. Needs stdin in raw mode, before any other
- * reader. → {bg, fg, red, green, yellow, blue} (what was answered) or null.
+ * reader. → {bg, fg, red, …, cyan} (what was answered) or null.
  */
 export function queryColors({ input = process.stdin, output = process.stdout, timeout = 400 } = {}) {
   if (!input.isTTY || !output.isTTY) return Promise.resolve(null);
@@ -73,7 +73,7 @@ export function queryColors({ input = process.stdin, output = process.stdout, ti
         if (!rgb) continue;
         if (m[1] === '11') got.bg = rgb;
         else if (m[1] === '10') got.fg = rgb;
-        else if (m[1] === '4') got[{ 1: 'red', 2: 'green', 3: 'yellow', 4: 'blue' }[m[2]]] = rgb;
+        else if (m[1] === '4') got[{ 1: 'red', 2: 'green', 3: 'yellow', 4: 'blue', 5: 'magenta', 6: 'cyan' }[m[2]]] = rgb;
       }
       resolve(got.bg ? got : null);
     };
@@ -84,7 +84,7 @@ export function queryColors({ input = process.stdin, output = process.stdout, ti
     const timer = setTimeout(done, timeout);
     input.on('data', onData);
     input.resume();
-    output.write('\x1b]11;?\x07\x1b]10;?\x07\x1b]4;1;?\x07\x1b]4;2;?\x07\x1b]4;3;?\x07\x1b]4;4;?\x07\x1b[c');
+    output.write('\x1b]11;?\x07\x1b]10;?\x07\x1b]4;1;?\x07\x1b]4;2;?\x07\x1b]4;3;?\x07\x1b]4;4;?\x07\x1b]4;5;?\x07\x1b]4;6;?\x07\x1b[c');
   });
 }
 
@@ -107,6 +107,14 @@ export function makeStyles(colors) {
     // a fact that is only information: the same hue, no fill
     factsoft: `1;${fg(c.blue)}`,
     factbar: fg(mix(c.bg, c.blue, 0.75)),
+    // what the agent says about a line, in the diff: its own hue
+    agent: `1;${fg(c.bg)};${bg(c.cyan)}`,
+    agentsoft: `1;${fg(c.cyan)}`,
+    agentbar: fg(mix(c.bg, c.cyan, 0.75)),
+    // the gutter mark of a line something is said about: fr, the agent, a comment
+    markfr: fg(c.blue),
+    markagent: fg(c.cyan),
+    markcomment: fg(c.magenta),
     // the diff, as diffview tints it: soft line backgrounds, the changed part stronger
     addbg: bg(mix(c.bg, c.green, 0.16 * k)),
     delbg: bg(mix(c.bg, c.red, 0.16 * k)),

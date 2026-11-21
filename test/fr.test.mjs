@@ -228,10 +228,11 @@ test('fr check: the sample is valid; coverage, enums and broken citations are re
   bad.groups[0].parts[0].ref = { hunk: 'gateway:H99' };
   bad.tests[0].flags[0].kind = 'odd';
   bad.ghosts[0].because = [];
+  delete bad.findings[0].note;
   bad.groups[2].parts.push({ ref: { hunk: 'refund-service:H4' }, role: 'test' });
   const res = await checkAnnotations(bad, ws);
   const at = res.errors.map((e) => e.at);
-  for (const want of ['groups[0].risk', 'groups[1].id', 'groups[0].parts[0].ref', 'tests[0].flags[0].kind', 'ghosts[0].because']) assert.ok(at.includes(want), `${want} in ${at.join(', ')}`);
+  for (const want of ['groups[0].risk', 'groups[1].id', 'groups[0].parts[0].ref', 'tests[0].flags[0].kind', 'ghosts[0].because', 'findings[0].note']) assert.ok(at.includes(want), `${want} in ${at.join(', ')}`);
   assert.deepEqual(res.multi, [{ id: 'refund-service:H4', groups: ['refund-key', 'cleanup'] }]);
 });
 
@@ -342,32 +343,45 @@ test('the intent shows on top in both lenses', async () => {
 
 // ---------- ghosts and test notes in place ----------
 
-test('ghosts and test notes appear under their hunk, in both lenses, and nothing is lost', async () => {
+test('findings sit under their line in the diff; the test intent before its code; nothing is lost', async () => {
   const ws = await loadWorkspace(dir);
   const ann = sampleAnnotations();
   const checked = { ann, ...(await checkAnnotations(ann, ws)) };
   const rs = fileOf(ws, 'refund-service', 'RefundService.java').hunks[0].key;
   const spec = fileOf(ws, 'refund-service', 'RefundServiceSpec.groovy').hunks[0].key;
   for (const lens of ['groups', 'services']) {
-    const rows = buildRows(ws, { marks: {}, comments: [] }, { width: 100, tint: false, lens, ann: checked });
-    const ghost = rows.findIndex((r) => /UNCHANGED +UNCLEAR/.test(plain(r.segs)));
-    const lastCode = rows.findLastIndex((r) => r.kind === 'code' && r.hunk === rs);
-    assert.ok(ghost > lastCode && lastCode >= 0, `${lens}: ghost under its hunk`);
+    const rows = buildRows(ws, { marks: {}, comments: [] }, { width: 110, tint: false, lens, ann: checked });
+    // the unchanged caller: under the changed line it depends on (new 4), the line marked
+    const ghost = rows.findIndex((r) => /CALLER TO CHECK +refund-service-seed\/.*RefundService\.java:4-6/.test(plain(r.segs)));
+    assert.ok(ghost > 0, `${lens}: the caller is shown`);
     assert.equal(rows[ghost].hunk, rs);
-    const t = text(rows);
-    assert.match(t, /TEST INTENT +books a refund once per key/);
-    assert.match(t, /NAME VS ASSERTION/);
-    assert.match(t, /LOOSENED[\s\S]*1 \* ledger\.book\('o1', -5\)/); // the cited old line
-    assert.equal(rows.find((r) => /TEST INTENT/.test(plain(r.segs))).hunk, spec);
-    assert.doesNotMatch(t, /Other notes/);
+    assert.deepEqual(rows[ghost - 1].at, { old: null, new: 4 }, `${lens}: right under new line 4`);
+    assert.match(plain(rows[ghost - 1].segs), /^▎? *▌/, `${lens}: the line is marked`);
+    assert.ok(rows.slice(ghost + 1).some((r) => r.kind === 'code' && r.hunk === rs), `${lens}: inside the hunk, not after it`);
+    // the agent's flag on the old line 11 of the spec, and fr's own on new line 12
+    const flag = rows.findIndex((r) => /┃ +LOOSENED/.test(plain(r.segs)));
+    assert.equal(rows[flag - 1].at?.old, 11);
+    const fr = rows.findIndex((r) => /ASSERTION LOOSENED +0 → 3 wildcards/.test(plain(r.segs)));
+    assert.equal(rows[fr - 1].at?.new, 12);
+    // the intent comes before the test's code
+    const intent = rows.findIndex((r) => /TEST INTENT +books a refund once per key/.test(plain(r.segs)));
+    assert.equal(rows[intent].hunk, spec);
+    assert.ok(intent < rows.findIndex((r) => r.kind === 'code' && r.hunk === spec));
+    assert.match(text(rows), /NAME VS ASSERTION/); // a flag on no line stays with the intent
+    // the agent's finding: under the last removed line it cites (old 9), all three marked
+    const found = rows.findIndex((r) => /┃ +DELETED CHECK +The amount <= 0 check is gone/.test(plain(r.segs)));
+    assert.equal(rows[found - 1].at?.old, 9, `${lens}: under old line 9`);
+    const marked = rows.filter((r) => r.kind === 'code' && [7, 8, 9].includes(r.at?.old) && /▌/.test(plain(r.segs).slice(0, 4)));
+    assert.equal(marked.length, 3, `${lens}: lines 7-9 marked`);
+    assert.doesNotMatch(text(rows), /Other notes/);
   }
-  // folded: the count on the hunk's title
-  const folded = buildRows(ws, { marks: { [rs]: { at: 'x' } }, comments: [] }, { width: 100, tint: false, lens: 'services', ann: checked });
-  assert.match(text(folded), /RefundService\.java.*✓ reviewed.*1 unchanged caller/); // the file folds, its title counts
-  assert.doesNotMatch(text(folded), /Other notes/); // folded away, not lost
-  // a ghost depending on no hunk goes to "Other notes"
+  // folded: the count on the title
+  const folded = buildRows(ws, { marks: { [rs]: { at: 'x' } }, comments: [] }, { width: 110, tint: false, lens: 'services', ann: checked });
+  assert.match(text(folded), /RefundService\.java.*✓ reviewed.*1 finding/);
+  assert.doesNotMatch(text(folded), /Other notes/);
+  // a caller depending on no changed line goes to "Other notes"
   const a2 = clone(ann);
   a2.ghosts[0].because = [{ path: '../remotes/refund-service-seed', file: 'src/main/java/shop/refund/Legacy.java', lines: '1' }];
   const c2 = { ann: a2, ...(await checkAnnotations(a2, ws)) };
-  assert.match(text(buildRows(ws, { marks: {}, comments: [] }, { width: 100, tint: false, lens: 'groups', ann: c2 })), /Other notes[\s\S]*UNCHANGED/);
+  assert.match(text(buildRows(ws, { marks: {}, comments: [] }, { width: 110, tint: false, lens: 'groups', ann: c2 })), /Other notes[\s\S]*UNCHANGED/);
 });

@@ -258,6 +258,13 @@ Built in this order, each step usable on its own:
    heuristics (`src/asserts.mjs`: removed, loosened, expected value changed, disabled,
    catch-all, longer timeout, a new test that asserts nothing). Still to do: JaCoCo
    coverage of the changed lines.
+
+   **Decided while building (2026-11-21): findings sit in the diff.** The reader looks at
+   a change and is made aware there of everything smelly about it. fr's line signals,
+   the agent's `findings` (new section), test flags and unchanged callers that cite
+   changed lines are shown under those lines, with a gutter mark (`src/inline.mjs`);
+   prose that explains why stays above the code. Quoting a changed line in a note below
+   the hunk made the reader match it to the diff: too much load.
    Pure identifier renames (an AST-level diff) are not verified yet.
 4. **The feedback key** (§11).
 

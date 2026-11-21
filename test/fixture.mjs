@@ -162,6 +162,14 @@ export function sampleAnnotations() {
         ],
       },
     ],
+    findings: [
+      {
+        ref: { repo: 'gateway', file: RC, lines: '7-9', side: 'old' },
+        kind: 'deleted-check',
+        severity: 'high',
+        note: 'The `amount <= 0` check is gone; nothing else rejects a negative refund.',
+      },
+    ],
     ghosts: [
       {
         ref: { path: '../remotes/refund-service-seed', file: RS, lines: '4-6' },

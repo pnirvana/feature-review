@@ -264,7 +264,10 @@ export async function computeSignals(ws) {
             // an expected value changed already says what changed: it gets the code beside it
             const exp = units.get(h.key)?.find((x) => x.kind === 'expected-changed');
             if (exp) exp.text += `, ${withCode}`;
-            else add(units, h.key, { kind: 'test-with-code', label: 'EXISTING TEST CHANGED', text: withCode, level: 'warn' });
+            else {
+              const l = h.lines.find(([x, line]) => x === '-' && significant(line));
+              add(units, h.key, { kind: 'test-with-code', label: 'EXISTING TEST CHANGED', text: withCode, level: 'warn', at: { side: 'old', line: l[2] } });
+            }
           }
       }
     }),

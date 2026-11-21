@@ -247,3 +247,16 @@ test('s switches side by side ↔ inline with one press each way', async () => {
   assert.match(term.screen()[0], /· side by side/);
   assert.ok(split());
 });
+
+test('⏎ on an unchanged caller in the diff shows its code, again hides it', async () => {
+  const { term } = await viewer({ rows: 40, cols: 130 });
+  await term.type('/', ...'CALLER TO CHECK', '\r', '\x1b');
+  assert.match(term.cursor().text, /CALLER TO CHECK +refund-service-seed\/.*RefundService\.java:4-6 +⏎ show the code/);
+  const seedLine = (l) => /4 +public void refund\(String orderId, long amount\) \{/.test(l) && /┃/.test(l);
+  assert.ok(!term.screen().some(seedLine));
+  await term.type('\r');
+  assert.match(term.cursor().text, /⏎ hide the code/);
+  assert.ok(term.screen().some(seedLine), term.screen().join('\n'));
+  await term.type('\r');
+  assert.ok(!term.screen().some(seedLine));
+});

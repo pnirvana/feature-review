@@ -14,6 +14,11 @@ rollout, one tab each, every citation a jump to its code. Step 2 is complete.
 
 - **The code stays the centre.** Annotations attach to hunks and lines; nothing is shown
   in place of code, and every hunk stays on screen whatever the agent says.
+- **Point at the line.** What is smelly about a changed line is said under that line, in
+  the diff (a finding), with a mark in the gutter: the reader looks at the change and is
+  made aware of everything about it there, instead of matching a quote in a note to the
+  diff. A finding, a test flag or a ghost that cites changed lines is shown that way;
+  prose that explains *why* (intent, a group's why, a test's behaviour) stays above.
 - **Every claim cites code; the tool extracts it.** No pasted code. A citation that does
   not resolve is an error, not a warning.
 - **Prose is Markdown.** Every free-text field (`intent`, `why`, `note`, `behaviour`,
@@ -60,6 +65,7 @@ keys when the file is checked.
   "intent": "What was asked for, e.g. the issue text, one paragraph.",
   "written": {"by": "review-agent", "at": "2026-11-21T16:00:00Z", "heads": {"gateway": "4c4f363…", "refund-service": "a3ec0c4…"}},
   "groups": [],
+  "findings": [],
   "design": [],
   "names": [],
   "tests": [],
@@ -107,6 +113,20 @@ id now names a different hunk.
 - **Coverage:** every hunk should be in exactly one group. The viewer shows hunks in no
   group under "Not grouped" (never hidden), and `fr check` lists them.
 
+### findings: what is smelly about a changed line
+
+```json
+{"ref": {"repo": "gateway", "file": "…/RefundController.java", "lines": "7-9", "side": "old"},
+ "kind": "deleted-check", "severity": "high",
+ "note": "The `amount <= 0` check is gone; nothing else rejects a negative refund."}
+```
+
+Shown under the last cited line, in the diff, with the cited lines marked in the gutter.
+`kind`: a few words, shown as the badge (`deleted-check`, `money`, `transaction`,
+`changed-exception-handling`, `concurrency`, …: the signals of discovery §4, at their
+line). `severity`: `high` | `medium` | `low` (low is shown as information). Cite changed
+lines (side `old` for removed ones); unchanged code that should have changed is a ghost.
+
 ### design: the design delta (§7)
 
 ```json
@@ -144,6 +164,9 @@ Terms come from the code (§13: the code is the single source of truth).
            {"kind": "loosened", "refs": [{"repo": "refund-service", "file": "…Spec.groovy", "lines": "11", "side": "old"}]}]}
 ```
 
+A flag that cites changed lines (`refs`) is shown in the diff under them; the others stay
+with the test's intent, which is shown above the test's code.
+
 Flag kinds: `name-vs-assertion`, `loosened`, `expected-changed-with-code`, `removed`,
 `disabled`, `timeout-raised`, `mocks-unit-under-test`, `catch-all`, `snapshot-regenerated`.
 
@@ -156,8 +179,9 @@ Flag kinds: `name-vs-assertion`, `loosened`, `expected-changed-with-code`, `remo
  "status": "broken", "found_by": "grep 'refund(' in all repositories"}
 ```
 
-`status`: `ok` | `broken` | `unclear`. Shown in place, under the hunk it depends on
-(`because`), as unchanged code.
+`status`: `ok` | `broken` | `unclear`. Shown in the diff under the changed line it
+depends on (`because`), as one line naming the caller; ⏎ shows the caller's code. A
+ghost whose `because` cites no changed line is shown under "Other notes".
 
 ### contracts: producer and consumers side by side (§6)
 

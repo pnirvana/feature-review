@@ -284,7 +284,8 @@ function runs(lines) {
  * stronger, and (layout 'split', or 'auto' when there is room) old and new side by side
  * with ╱ where a side has no line. `signs` adds +/- (for plain text, where colour is gone).
  * Plain code shows its line number and a bar on changed lines. → rows with `line` ({side,
- * n} for a diff: the new side where a row has one, n for code), `group` and `title`.
+ * n} for a diff: the new side where a row has one, n for code), `at` ({old, new}: the
+ * line numbers a diff row shows), `group` and `title`.
  */
 export function codeView({ groups, name = '', width = 100, highlight: mode = 'auto', tint = true, layout = 'unified', signs = false, segsFor = null }) {
   const isDiff = groups.some((g) => g.lines.some((l) => l.old !== undefined || l.new !== undefined) && !g.lines.some((l) => l.n !== undefined));
@@ -361,7 +362,7 @@ export function codeView({ groups, name = '', width = 100, highlight: mode = 'au
         const gw = segsWidth(gutter);
         hardWrap(styled.get(l), Math.max(8, width - gw)).forEach((r, y) => {
           const g2 = y ? [[' '.repeat(gw - 2), ''], ['┆', 'gray'], [' ', bg]] : gutter;
-          rows.push({ segs: bg ? pad([...g2, ...r], width, bg) : [...g2, ...r], line: lineOf(l), ...meta(l) });
+          rows.push({ segs: bg ? pad([...g2, ...r], width, bg) : [...g2, ...r], line: lineOf(l), at: { old: l.old ?? null, new: l.new ?? null }, ...meta(l) });
         });
       }
       return;
@@ -388,7 +389,7 @@ export function codeView({ groups, name = '', width = 100, highlight: mode = 'au
       for (let y = 0; y < h; y++) {
         const left = L[y] ?? (o ? [[' '.repeat(half), bgOf(o)]] : [['╱'.repeat(half), 'filler']]);
         const right = R[y] ?? (n ? [[' '.repeat(half), bgOf(n)]] : [['╱'.repeat(half), 'filler']]);
-        rows.push({ segs: [...left, ['│', 'gray'], ...right], line: lineOf(anchor), ...(o && n && o !== n ? { old: o.old } : {}), ...meta(anchor) });
+        rows.push({ segs: [...left, ['│', 'gray'], ...right], line: lineOf(anchor), at: { old: o?.old ?? null, new: n?.new ?? null }, ...(o && n && o !== n ? { old: o.old } : {}), ...meta(anchor) });
       }
     }
   });

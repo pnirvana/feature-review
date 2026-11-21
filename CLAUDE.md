@@ -13,7 +13,8 @@ Step 2, the annotation file (`docs/annotations.md`), is built: `fr hunks`, `fr c
 the groups lens, ghosts and test intents in place, the overview (`m`). Step 3, the cheap
 objective signals (`src/signals.mjs`, `src/asserts.mjs`), is under way: verified
 mechanical changes, tests paired with code and assertion heuristics are built; JaCoCo
-coverage of the changed lines is next.
+coverage of the changed lines is next. Findings sit in the diff under their line
+(`src/inline.mjs`, discovery §12).
 
 `npm test` runs the tests; `node test/fixture.mjs <dir>` builds a sample feature.
 

@@ -24,6 +24,7 @@ const HELP = [
   ']h [h           next / previous hunk    ]u [u  next / previous hunk not reviewed yet',
   ']c [c           next / previous comment',
   'gt              from code to its test in the change, or back (⏎ on a TESTS line: that file)',
+  '⏎               on a finding about an unchanged caller: show its code, or hide it',
   'v               reviewed: the hunk under the cursor (on a file, part or group line: all of it), then on',
   'V               reviewed: the whole file under the cursor (again: not reviewed)',
   'space           fold the hunk (on a file or group line: that)   z  the file or group   Z  all of them',
@@ -79,7 +80,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
   };
 
   // ---------- data ----------
-  const rowKey = (r) => (r ? [r.kind, r.group ?? '', r.fid ?? r.repo ?? '', r.hunk ?? '', JSON.stringify(r.line ?? null), r.comment ?? ''].join('|') : null);
+  const rowKey = (r) => (r ? [r.kind, r.group ?? '', r.fid ?? r.repo ?? '', r.hunk ?? '', JSON.stringify(r.line ?? null), r.comment ?? '', r.callout ?? ''].join('|') : null);
   const lensNow = () => (ui.ann?.groups.length ? (ui.lens ?? 'groups') : 'services');
   /** The layout on screen: auto is split when the code is 110 columns wide (codeView), else unified. */
   const shownLayout = () => (ui.layout !== 'auto' ? ui.layout : opts().width - (lensNow() === 'groups' ? 2 : 0) >= 110 ? 'split' : 'unified');
@@ -757,6 +758,16 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     else if (k === 'z') toggleFold('outer');
     else if (k === 'm') openOverview();
     else if (k === '\r' && ui.rows[ui.cur]?.pair) return jumpToPair(ui.rows[ui.cur].pair);
+    else if (k === '\r' && ui.rows[ui.cur]?.expand) {
+      // a finding naming code outside the change: show it in place, or hide it again
+      const id = ui.rows[ui.cur].expand;
+      ui.fold.set(id, ui.fold.get(id) === false);
+      relayout(); // the cursor stays on the finding (its first row)
+      // what opened shows: scroll it into view, the finding still on screen
+      const last = ui.rows.findLastIndex((r) => r.expand === id);
+      const bodyH = Math.max(1, H() - 3);
+      if (last >= ui.top + bodyH) ui.top = Math.min(ui.cur, last - bodyH + 1);
+    }
     else if (k === '\t') {
       if (!ui.ann?.groups.length) return flash(ui.annError ? `annotations: ${ui.annError}` : `no groups: the agent writes them to ${annotationsPath(ui.ws.root)}`, 'yellow');
       return switchLens();

@@ -173,9 +173,9 @@ export async function checkAnnotations(ann, ws) {
 
   if (!ann || typeof ann !== 'object' || Array.isArray(ann)) return { errors: [{ at: '', msg: 'the file must hold a JSON object' }], warnings, groups: [], ungrouped: ids.map((u) => u.id), multi: [], refs, ids };
   if (ann.version !== 1) err('version', 'must be 1');
-  const known = ['version', 'intent', 'written', 'groups', 'design', 'names', 'tests', 'ghosts', 'contracts', 'rollout'];
+  const known = ['version', 'intent', 'written', 'groups', 'findings', 'design', 'names', 'tests', 'ghosts', 'contracts', 'rollout'];
   for (const k of Object.keys(ann)) if (!known.includes(k)) warn(k, 'unknown field, ignored');
-  for (const k of ['groups', 'design', 'names', 'tests', 'ghosts', 'contracts']) if (ann[k] !== undefined && !Array.isArray(ann[k])) err(k, 'must be a list');
+  for (const k of ['groups', 'findings', 'design', 'names', 'tests', 'ghosts', 'contracts']) if (ann[k] !== undefined && !Array.isArray(ann[k])) err(k, 'must be a list');
 
   // every citation anywhere, resolved
   const walk = async (x, at) => {
@@ -256,6 +256,14 @@ export async function checkAnnotations(ann, ws) {
     if (!str(t.behaviour)) warn(`${at}.behaviour`, 'missing: the behaviour the test specifies, as a sentence');
     if (t.group !== undefined && !seen.has(t.group)) err(`${at}.group`, `no group "${t.group}"`);
     (t.flags ?? []).forEach((f, j) => oneOf(f?.kind, ENUMS.testFlag, `${at}.flags[${j}].kind`, true));
+  });
+  each('findings', (f, at) => {
+    needRef(f.ref, `${at}.ref`);
+    if (!str(f.kind)) err(`${at}.kind`, 'missing: what is smelly, in a few words (deleted-check, money, …)');
+    if (!str(f.note)) err(`${at}.note`, 'missing');
+    oneOf(f.severity, ENUMS.risk, `${at}.severity`);
+    const r = refs.get(f.ref);
+    if (r?.ok && (r.external || !r.units.length)) warn(`${at}.ref`, 'cites no changed line: a finding is shown under the changed line it is about (unchanged code that should have changed: a ghost)');
   });
   each('ghosts', (g, at) => {
     needRef(g.ref, `${at}.ref`);

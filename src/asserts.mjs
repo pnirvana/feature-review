@@ -99,9 +99,18 @@ export function testSignals(f, texts) {
     const insA = ins.filter(([, , , n]) => now.has(n)).map(([, s]) => s);
     const delS = del.map(([, s]) => s);
     const insS = ins.map(([, s]) => s);
+    // the line a signal is about: shown under it, in the diff (the text need not repeat it)
+    const atNew = (fn) => {
+      const l = ins.find(([, s, , n]) => fn(s, n));
+      return l ? { at: { side: 'new', line: l[3] } } : {};
+    };
+    const atOld = (fn) => {
+      const l = del.find(([, s, o]) => fn(s, o));
+      return l ? { at: { side: 'old', line: l[2] } } : {};
+    };
 
     // removed assertions, when the file has fewer of them (not merely moved within it)
-    if (delA.length > insA.length && now.size < was.size) add(h.key, { kind: 'assertion-removed', label: 'ASSERTION REMOVED', text: `${delA.length - insA.length} fewer here: ${short(delA[0].trim())}` });
+    if (delA.length > insA.length && now.size < was.size) add(h.key, { kind: 'assertion-removed', label: 'ASSERTION REMOVED', text: `${delA.length - insA.length} fewer in this hunk, ${was.size - now.size} in the file`, ...atOld((x, o) => was.has(o)) });
 
     // an expected value changed: the same assertion with other literals
     const shape = (s) => s.trim().replace(LITERAL, '§');
@@ -111,29 +120,29 @@ export function testSignals(f, texts) {
       const a = d.match(LITERAL) ?? [];
       const b = i.match(LITERAL) ?? [];
       const k = a.findIndex((x, j) => x !== b[j]);
-      add(h.key, { kind: 'expected-changed', label: 'EXPECTED VALUE CHANGED', text: `${short(a[k] ?? '?', 30)} → ${short(b[k] ?? '?', 30)}` });
+      add(h.key, { kind: 'expected-changed', label: 'EXPECTED VALUE CHANGED', text: `${short(a[k] ?? '?', 30)} → ${short(b[k] ?? '?', 30)}`, ...atNew((x) => x === i) });
       break;
     }
 
     // exact checks traded for weaker ones, or wildcards for values
     if (count(delA, STRONG) > count(insA, STRONG) && count(insA, WEAK) > count(delA, WEAK))
-      add(h.key, { kind: 'loosened', label: 'ASSERTION LOOSENED', text: `${firstName(delA, STRONG) ?? 'exact'} → ${firstName(insA, WEAK) ?? 'weaker'}` });
+      add(h.key, { kind: 'loosened', label: 'ASSERTION LOOSENED', text: `${firstName(delA, STRONG) ?? 'exact'} → ${firstName(insA, WEAK) ?? 'weaker'}`, ...atNew((x, n) => now.has(n) && WEAK.test(x)) });
     else if (wildcards(insA) > wildcards(delA) && delA.length)
-      add(h.key, { kind: 'loosened', label: 'ASSERTION LOOSENED', text: `${wildcards(delA)} → ${wildcards(insA)} wildcards (any value matches): ${short(insA.find((s) => WILDCARD.test(s))?.trim() ?? '', 50)}` });
+      add(h.key, { kind: 'loosened', label: 'ASSERTION LOOSENED', text: `${wildcards(delA)} → ${wildcards(insA)} wildcards: any value matches`, ...atNew((x, n) => now.has(n) && WILDCARD.test(x)) });
 
-    if (count(insS, DISABLED) > count(delS, DISABLED)) add(h.key, { kind: 'disabled', label: 'TEST DISABLED', text: short(insS.find((s) => DISABLED.test(s)).trim(), 50) });
-    if (count(insS, CATCH_ALL) > count(delS, CATCH_ALL)) add(h.key, { kind: 'catch-all', label: 'CATCHES ANY EXCEPTION', text: short(insS.find((s) => CATCH_ALL.test(s)).trim(), 50) });
+    if (count(insS, DISABLED) > count(delS, DISABLED)) add(h.key, { kind: 'disabled', label: 'TEST DISABLED', text: short(insS.find((x) => DISABLED.test(x)).trim(), 50), ...atNew((x) => DISABLED.test(x)) });
+    if (count(insS, CATCH_ALL) > count(delS, CATCH_ALL)) add(h.key, { kind: 'catch-all', label: 'CATCHES ANY EXCEPTION', text: short(insS.find((x) => CATCH_ALL.test(x)).trim(), 50), ...atNew((x) => CATCH_ALL.test(x)) });
 
     const nums = (xs) => xs.filter((s) => TIMEOUT.test(s)).flatMap((s) => (s.match(/\b\d+(?:\.\d+)?\b/g) ?? []).map(Number));
     const [tOld, tNew] = [nums(delS), nums(insS)];
-    if (tOld.length && tNew.length && Math.max(...tNew) > Math.max(...tOld)) add(h.key, { kind: 'timeout', label: 'LONGER TIMEOUT', text: `${Math.max(...tOld)} → ${Math.max(...tNew)}` });
+    if (tOld.length && tNew.length && Math.max(...tNew) > Math.max(...tOld)) add(h.key, { kind: 'timeout', label: 'LONGER TIMEOUT', text: `${Math.max(...tOld)} → ${Math.max(...tNew)}`, ...atNew((x) => TIMEOUT.test(x)) });
 
     // a test added here that asserts nothing, or only that nothing is thrown
     for (const d of added) {
       if (!ins.some(([, , , n]) => n === d.line)) continue;
       const body = [...now].filter((n) => n > d.line && n <= d.end).map((n) => newLines[n - 1]);
-      if (!body.length) add(h.key, { kind: 'asserts-nothing', label: 'ASSERTS NOTHING', text: `“${short(d.name, 50)}”` });
-      else if (body.every((s) => NOTHROW.test(s))) add(h.key, { kind: 'asserts-nothing', label: 'ONLY CHECKS NOTHING IS THROWN', text: `“${short(d.name, 50)}”` });
+      if (!body.length) add(h.key, { kind: 'asserts-nothing', label: 'ASSERTS NOTHING', text: `“${short(d.name, 50)}”`, at: { side: 'new', line: d.line } });
+      else if (body.every((s) => NOTHROW.test(s))) add(h.key, { kind: 'asserts-nothing', label: 'ONLY CHECKS NOTHING IS THROWN', text: `“${short(d.name, 50)}”`, at: { side: 'new', line: d.line } });
     }
   }
   return { units, file };

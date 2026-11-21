@@ -15,6 +15,7 @@ import { highlightAsync } from './md/highlight.mjs';
 import { pad, plain, restyle, untab, wrapSegs } from './md/term.mjs';
 import { fileTexts } from './workspace.mjs';
 import { locate } from './state.mjs';
+import { collectCallouts } from './inline.mjs';
 import './ui/theme.mjs'; // the theme's named styles, the fallback until the viewer asks the terminal
 
 export const fid = (f) => `${f.repo}\0${f.file}`;
@@ -163,26 +164,35 @@ function context(ws, st, opts) {
   const sig = ws.signals ?? { units: new Map(), files: new Map(), mechanical: new Set() };
   // verified mechanical units fold like reviewed ones: a glance, until marked
   const settled = (k) => marked(k) || sig.mechanical.has(k);
-  return { ws, st, ...opts, marked, settled, sig, comments, shown: new Set(), notes: notesByUnit(opts.ann), placed: new Set() };
+  // what fr and the agent say about particular changed lines: shown under them, in the diff
+  const { byUnit: callouts, inlined } = collectCallouts(ws, opts.ann);
+  return { ws, st, ...opts, marked, settled, sig, comments, callouts, inlined, shown: new Set(), notes: notesByUnit(opts.ann, inlined), placed: new Set() };
 }
 
 /**
  * The annotations shown in place, by the unit (hunk) they belong under: a ghost under the
  * first hunk it depends on (`because`), a test note under the test's hunk. Notes on no
- * hunk go under the key null. → Map unit|null → [{kind: 'ghost'|'test', x, res}]
+ * hunk go under the key null. Ghosts and findings shown in the diff (`inlined`) are not
+ * notes. → Map unit|null → [{kind: 'ghost'|'test'|'finding', x, res}]
  */
-function notesByUnit(ann) {
+function notesByUnit(ann, inlined = new Set()) {
   const out = new Map();
   if (!ann?.ann) return out;
   const res = (ref) => ann.refs?.get(ref) ?? null;
   const add = (unit, note) => out.set(unit, [...(out.get(unit) ?? []), note]);
   for (const g of Array.isArray(ann.ann.ghosts) ? ann.ann.ghosts : []) {
+    if (inlined.has(g)) continue;
     const unit = (Array.isArray(g?.because) ? g.because : []).map((r) => res(r)).find((r) => r?.ok && r.units.length)?.units[0] ?? null;
     add(unit, { kind: 'ghost', x: g, res: res(g?.ref) });
   }
   for (const t of Array.isArray(ann.ann.tests) ? ann.ann.tests : []) {
     const r = res(t?.ref);
     add(r?.ok && r.units.length ? r.units[0] : null, { kind: 'test', x: t, res: r });
+  }
+  for (const f of Array.isArray(ann.ann.findings) ? ann.ann.findings : []) {
+    if (inlined.has(f)) continue;
+    const r = res(f?.ref);
+    add(r?.ok && r.units.length ? r.units[0] : null, { kind: 'finding', x: f, res: r });
   }
   return out;
 }
@@ -193,7 +203,7 @@ const human = (kind) => String(kind ?? '').replace(/-/g, ' ').toUpperCase();
 
 /** A ghost or a test note, as a block with a bar down its left. */
 function noteRows(ctx, { kind, x, res }, base) {
-  const bar = kind === 'ghost' ? (STATUS_BAR[x?.status] ?? 'yellow') : 'cyan';
+  const bar = kind === 'ghost' ? (STATUS_BAR[x?.status] ?? 'yellow') : 'agentbar';
   const w = ctx.width - 4;
   const body = [];
   if (kind === 'ghost') {
@@ -211,6 +221,10 @@ function noteRows(ctx, { kind, x, res }, base) {
     if (x?.why) body.push(...mdRows(x.why, w, base));
     if (x?.found_by) body.push({ kind: 'note', ...base, segs: [['found by ', 'dim'], [String(x.found_by), 'dim italic']] });
     if (res?.ok && res.code) body.push(spacer(base), ...citedRows({ ...ctx, width: w }, res, base));
+  } else if (kind === 'finding') {
+    body.push({ kind: 'note', ...base, segs: [[` ${human(x?.kind || 'finding')} `, x?.severity === 'low' ? 'agentsoft' : 'agent'], ['  ', ''], [refText(res, x?.ref), res?.ok ? 'bold' : 'red bold'], ...(res && !res.ok ? [[`  does not resolve: ${res.error}`, 'red']] : [])] });
+    if (x?.note) body.push(...mdRows(x.note, w, base));
+    if (res?.ok && res.code) body.push(spacer(base), ...citedRows({ ...ctx, width: w }, res, base));
   } else {
     body.push({ kind: 'note', ...base, segs: [[' TEST INTENT ', 'role'], ['  ', ''], [String(x?.name ?? refText(res, x?.ref)), 'bold']] });
     if (x?.behaviour) body.push(...mdRows(x.behaviour, w, base));
@@ -219,6 +233,7 @@ function noteRows(ctx, { kind, x, res }, base) {
       body.push(...mdRows(x.asserts, w, base, { extra: 'dim' }));
     }
     for (const f of Array.isArray(x?.flags) ? x.flags : []) {
+      if (ctx.inlined?.has(f)) continue; // shown in the diff, under its line
       body.push(spacer(base), { kind: 'note', ...base, segs: [[` ${human(f?.kind)} `, 'riskmedium']] });
       if (f?.note) body.push(...mdRows(f.note, w, base));
       for (const r of Array.isArray(f?.refs) ? f.refs : []) {
@@ -243,6 +258,11 @@ function hideNotes(ctx, units) {
   for (const u of units) if (ctx.notes.has(u)) ctx.placed.add(u);
   return noteCount(ctx, units);
 }
+/** The findings in the diff of these units, for a folded title: → [segment] or []. */
+const findingCount = (ctx, units) => {
+  const list = [].concat(units).flatMap((u) => ctx.callouts.get(u) ?? []);
+  return list.length ? [[`  ${plural(list.length, 'finding')}`, list.some((c) => c.level === 'warn') ? 'yellow' : 'dim']] : [];
+};
 const noteCount = (ctx, units) => {
   const list = [].concat(units).flatMap((u) => ctx.notes.get(u) ?? []);
   const g = list.filter((n) => n.kind === 'ghost').length;
@@ -266,12 +286,59 @@ function commentRowsOf(ctx, x, base) {
   return commentRows(x.c, x.loc, ctx.width, { ...base, kind: 'comment', comment: x.c.id });
 }
 
-/** A hunk: its title row and, unless folded, its code with the comments below their lines. */
+/** Does a callout or comment (side, from..to) cover this diff row? */
+const covers = (row, side, from, to) => {
+  const n = row.at?.[side];
+  return n != null && n >= from && n <= to;
+};
+const MARK = { agent: 'markagent', fr: 'markfr', comment: 'markcomment' };
+const GUTTER_MARK = 2; // the column for the marks, and a space
+
+/**
+ * A callout: a finding of fr or the agent, under the line it is about. One row with the
+ * badge and the text when it fits, else the text below; a bar down the left in the
+ * speaker's colour. An unchanged caller shows its code on ⏎.
+ */
+function calloutRows(ctx, c, base, indent) {
+  const fr = c.source === 'fr';
+  const bar = fr ? 'factbar' : 'agentbar';
+  const badge = fr ? (c.level === 'info' ? 'factsoft' : 'fact') : c.level === 'info' ? 'agentsoft' : 'agent';
+  const w = Math.max(20, ctx.width - indent - 2);
+  const open = c.expand && ctx.fold.get(`x:${c.key}`) === false;
+  const meta = { kind: 'note', ...base, callout: c.key, ...(c.expand ? { expand: `x:${c.key}` } : {}) };
+  const pre = [[' '.repeat(indent), ''], ['┃ ', bar]];
+  const head = [[` ${c.label} `, badge]];
+  if (c.ref) head.push(['  ', ''], [refText(c.ref, c.refRaw), c.ref.ok ? 'bold' : 'red bold']);
+  if (c.expand) head.push([open ? '   ⏎ hide the code' : '   ⏎ show the code', 'dim']);
+  const tone = c.level === 'warn' ? 'yellow' : 'dim';
+  let body = [];
+  const headW = head.reduce((n, [t]) => n + t.length, 0);
+  if (c.text && !c.md) {
+    if (headW + 2 + c.text.length <= w) return [{ ...meta, segs: [...pre, ...head, ['  ', ''], [c.text, tone]] }];
+    return [{ ...meta, segs: [...pre, ...head] }, ...wrapSegs([[c.text, tone]], w).map((r) => ({ ...meta, segs: [...pre, ...r] }))];
+  }
+  if (c.text) body = mdRows(c.text, w, base);
+  const rows = [{ ...meta, segs: [...pre, ...head] }];
+  // a one-line text fits beside the badge
+  if (body.length === 1 && !c.ref && headW + 2 + plain(body[0].segs).length <= w) rows[0].segs.push(['  ', ''], ...body[0].segs);
+  else for (const r of body) rows.push({ ...meta, segs: [...pre, ...r.segs] });
+  if (c.found_by) rows.push({ ...meta, segs: [...pre, ['found by ', 'dim'], [c.found_by, 'dim italic']] });
+  if (open) for (const r of citedRows({ ...ctx, width: w }, c.expand, base)) rows.push({ ...r, ...meta, segs: [...pre, ...r.segs] });
+  return rows;
+}
+
+/**
+ * A hunk: its title row and, unless folded, what fr found about it as a whole, the test it
+ * is (the agent's intent), then its code with the findings and comments below their lines
+ * and a mark in the gutter of each line something is said about; unchanged callers that
+ * point at no line of it after the code.
+ */
 function hunkRows(ctx, f, h, base, { note = null } = {}) {
   const { width, layout, tint, fold, marked } = ctx;
   const rows = [];
   const fileComments = ctx.comments.filter((x) => x.loc?.file === f && x.loc.line != null);
   const here = fileComments.filter((x) => h.lines.some(([t, , o, n]) => (x.loc.side === 'old' ? o : n) === x.loc.line));
+  const callouts = ctx.callouts.get(h.key) ?? [];
   const hr = marked(h.key);
   const hf = isFolded(h.key, ctx.settled(h.key), fold);
   rows.push({
@@ -285,32 +352,51 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
       ...(h.header ? [[' ' + h.header, 'dim']] : []),
       ...(hr ? [['  ✓ reviewed', 'green']] : []),
       ...(note ? [[`  ${note}`, 'yellow']] : []),
+      ...(hf ? findingCount(ctx, h.key) : []),
       ...(hf && here.length ? [[`  ${plural(here.length, 'comment')}`, 'magenta']] : []),
       ...(hf && noteCount(ctx, h.key) ? [[`  ${hideNotes(ctx, [h.key])}`, 'cyan']] : []),
     ],
   });
-  // what fr found, one per line: done with once the hunk is reviewed and folded
-  if (!(hr && hf)) rows.push(...signalRows(ctx.sig.units.get(h.key), { ...base, hunk: h.key }, { after: !hf }));
+  // what fr found about the hunk as a whole (a line's own finding goes under the line)
+  const whole = (ctx.sig.units.get(h.key) ?? []).filter((x) => !x.at);
+  if (!(hr && hf)) rows.push(...signalRows(whole, { ...base, hunk: h.key }, { after: !hf }));
   if (hf) return rows;
+  const notes = ctx.placed.has(h.key) ? [] : (ctx.notes.get(h.key) ?? []);
+  if (notes.length) ctx.placed.add(h.key);
+  const nb = { ...base, hunk: h.key };
+  // the test's intent before its code: what it should specify, then how it does
+  const intents = notes.filter((n) => n.kind === 'test').flatMap((n) => noteRows(ctx, n, nb));
+  if (intents.length) rows.push(...intents.slice(whole.length ? 1 : 0), spacer(nb));
+
   const lines = h.lines.map(([t, s, o, n]) => ({ t, s, old: o, new: n, hunk: h.key }));
-  const code = codeView({ groups: [{ lines }], name: f.file, width, layout: f.status === 'A' || f.status === 'D' ? 'unified' : layout, tint, signs: !tint, segsFor: segsForFile(ctx, f) }).map((x) => ({ ...x, ...base, kind: 'code' }));
-  // comments go below the last row of their line
+  const code = codeView({ groups: [{ lines }], name: f.file, width: width - GUTTER_MARK, layout: f.status === 'A' || f.status === 'D' ? 'unified' : layout, tint, signs: !tint, segsFor: segsForFile(ctx, f) }).map((x) => ({ ...x, ...base, kind: 'code' }));
+  const nw = Math.max(3, String(Math.max(0, ...h.lines.flatMap(([, , o, n]) => [o ?? 0, n ?? 0]))).length);
+  const indent = GUTTER_MARK + nw + 1;
+  // findings and comments go below the last row of their line
   const after = new Map();
+  const put = (at, item) => after.set(at, [...(after.get(at) ?? []), item]);
+  for (const c of callouts) put(code.findLastIndex((row) => row.at?.[c.side] === c.to), { c });
   for (const x of here) {
     let at = -1;
     code.forEach((row, i) => {
       const l = row.line;
       if ((l?.side === x.loc.side && l?.n === x.loc.line) || (x.loc.side === 'old' && row.old === x.loc.line)) at = i;
     });
-    if (!after.has(at)) after.set(at, []);
-    after.get(at).push(x);
+    put(at, { x });
   }
-  for (const x of after.get(-1) ?? []) rows.push(...commentRowsOf(ctx, x, { ...base, hunk: h.key }));
+  const itemRows = ({ c, x }) => (c ? calloutRows(ctx, c, nb, indent) : commentRowsOf(ctx, x, nb));
+  const mark = (row) => {
+    const who = callouts.filter((c) => covers(row, c.side, c.from, c.to)).map((c) => c.source);
+    if (here.some((x) => covers(row, x.loc.side, x.loc.line, x.loc.line))) who.push('comment');
+    const top = ['agent', 'fr', 'comment'].find((k) => who.includes(k));
+    return top ? [['▌', MARK[top]], [' ', '']] : [[' '.repeat(GUTTER_MARK), '']];
+  };
+  for (const it of after.get(-1) ?? []) rows.push(...itemRows(it));
   code.forEach((row, i) => {
-    rows.push(row);
-    for (const x of after.get(i) ?? []) rows.push(...commentRowsOf(ctx, x, { ...base, hunk: h.key }));
+    rows.push({ ...row, segs: [...mark(row), ...row.segs] });
+    for (const it of after.get(i) ?? []) rows.push(...itemRows(it));
   });
-  rows.push(...notesFor(ctx, h.key, { ...base, hunk: h.key }));
+  for (const n of notes.filter((y) => y.kind !== 'test')) rows.push(...noteRows(ctx, n, nb));
   return rows;
 }
 
@@ -380,6 +466,7 @@ function fileTitle(ctx, f, { folded, units = unitsOf(f), base = {} }) {
       ...(f.dirty ? [['  ● uncommitted', 'yellow']] : []),
       [reviewed ? '  ✓ reviewed' : units.length > 1 ? `  ${fd}/${units.length}` : '', reviewed ? 'green' : 'dim'],
       ...(mech && folded ? [['  ', ''], [' MECHANICAL ', 'fact'], [` verified: ${[...new Set(units.flatMap((u) => ctx.sig.units.get(u) ?? []).filter((s) => s.level === 'fact').map((s) => [s.label.toLowerCase(), s.kind === 'moved' ? s.text : ''].join(' ').trim()))].join(', ')}`, 'dim']] : []),
+      ...(folded ? findingCount(ctx, units) : []),
       ...(folded && n ? [[`  ${plural(n, 'comment')}`, 'magenta']] : []),
       ...(folded && noteCount(ctx, units) ? [[`  ${hideNotes(ctx, units)}`, 'cyan']] : []),
     ],
@@ -520,7 +607,7 @@ function groupHead(ctx, { gid, n, title, folded, units, meta, bg }) {
       kind: 'note',
       group: gid,
       units,
-      segs: band([['   ', ''], ...meta, ...(meta.length ? [['     ', '']] : []), progress(done, units.length), ...(folded && noteCount(ctx, units) ? [[`     ${hideNotes(ctx, units)}`, 'cyan']] : [])], width, bg),
+      segs: band([['   ', ''], ...meta, ...(meta.length ? [['     ', '']] : []), progress(done, units.length), ...(folded ? findingCount(ctx, units) : []), ...(folded && noteCount(ctx, units) ? [[`     ${hideNotes(ctx, units)}`, 'cyan']] : [])], width, bg),
     },
   ];
 }
@@ -578,8 +665,8 @@ function groupsLens(ctx) {
           ...(f?.dirty ? [['  ● uncommitted', 'yellow']] : []),
         ],
       });
-      if (f) body.push(...fileSignalRows(ctx, f, { folded: false, base: pbase }));
       if (p?.note) body.push(...mdRows(p.note, inner.width, pbase, { extra: 'dim' }));
+      if (f) body.push(...fileSignalRows(ctx, f, { folded: false, base: pbase }));
       if (res && !res.ok) body.push({ kind: 'note', ...pbase, segs: [[`does not resolve: ${res.error}`, 'red']] });
       if (!res?.ok) continue;
       if (f) body.push(...fileComments(inner, f, pbase));

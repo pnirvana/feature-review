@@ -100,6 +100,7 @@ explain what fr has verified.
 | `m` | the overview: design, names, contracts, rollout |
 | `]]` `[[` · `]h` `[h` · `]g` `[g` · `]c` `[c` | file (or part) · hunk · group (or service) · comment |
 | `gt` | from code to its test in the change, or back (`⏎` on a `TESTS` line: that file) |
+| `⏎` | on an unchanged caller in the diff: show its code, or hide it |
 | `space` `z` `Z` | fold the hunk · the file or group · all of them |
 | `c` · `e` · `x` | comment on the line (on a file line: the file) · edit · delete |
 | `o` | open the line in `$EDITOR` |
@@ -129,10 +130,19 @@ grouped**: every hunk no group explains. `tab` switches to the services lens. `]
 the agent calls mechanical starts folded and says "claimed, not verified". The viewer
 reloads the file when the agent rewrites it, and says when the notes may be stale.
 
-Under a hunk, in either lens: the **unchanged callers** that depend on it (status
-broken, unclear or ok, with their code), and **test intents** under a test's hunk (the
-behaviour it specifies, what it really asserts, flags such as a loosened assertion with
-the old line). Text in the annotations is Markdown.
+**Findings sit in the diff, under the line they are about**, and the line is marked in
+the gutter (▌: cyan the agent, blue fr, magenta your comment). You read the change and
+see there what is smelly about it, instead of matching a quoted line below to the diff:
+
+- the agent's **findings** (`DELETED CHECK` under the removed check, with its note);
+- **unchanged callers** that depend on a changed line, as one line naming the caller
+  (`BREAKS A CALLER`, `CALLER TO CHECK`, `CALLER STILL FINE`); `⏎` shows its code;
+- test **flags** that cite a line (a loosened assertion under the old line);
+- fr's own test signals (`ASSERTION LOOSENED`, `EXPECTED VALUE CHANGED`, …).
+
+What explains *why* stays above the code: a test's **intent** (the behaviour it
+specifies, what it really asserts) comes before the test's code. A folded hunk, file or
+group counts its findings. Text in the annotations is Markdown.
 
 `m` opens the **overview**, the map of the change beyond its hunks, one tab each:
 **Design** (types and responsibilities, new dependencies, signals, how the codebase does
