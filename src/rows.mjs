@@ -243,7 +243,7 @@ function noteRows(ctx, { kind, x, res }, base) {
       }
     }
   }
-  return [spacer(base), ...body.map((r) => ({ ...r, segs: [['  ', ''], ['┃ ', bar], ...r.segs] }))];
+  return [spacer(base), ...body.map((r) => ({ ...r, callout: `note:${kind}`, segs: [['  ', ''], ['┃ ', bar], ...r.segs] }))];
 }
 
 /** The notes placed under a unit, once per view (a hunk shown in two groups gets them the first time). */
@@ -359,13 +359,13 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
   });
   // what fr found about the hunk as a whole (a line's own finding goes under the line)
   const whole = (ctx.sig.units.get(h.key) ?? []).filter((x) => !x.at);
-  if (!(hr && hf)) rows.push(...signalRows(whole, { ...base, hunk: h.key }, { after: !hf }));
+  if (!(hr && hf) && !ctx.quiet) rows.push(...signalRows(whole, { ...base, hunk: h.key }, { after: !hf }));
   if (hf) return rows;
   const notes = ctx.placed.has(h.key) ? [] : (ctx.notes.get(h.key) ?? []);
   if (notes.length) ctx.placed.add(h.key);
   const nb = { ...base, hunk: h.key };
   // the test's intent before its code: what it should specify, then how it does
-  const intents = notes.filter((n) => n.kind === 'test').flatMap((n) => noteRows(ctx, n, nb));
+  const intents = ctx.quiet ? [] : notes.filter((n) => n.kind === 'test').flatMap((n) => noteRows(ctx, n, nb));
   if (intents.length) rows.push(...intents.slice(whole.length ? 1 : 0), spacer(nb));
 
   const lines = h.lines.map(([t, s, o, n]) => ({ t, s, old: o, new: n, hunk: h.key }));
@@ -384,7 +384,8 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
     });
     put(at, { x });
   }
-  const itemRows = ({ c, x }) => (c ? calloutRows(ctx, c, nb, indent) : commentRowsOf(ctx, x, nb));
+  // annotations hidden (quiet): the gutter marks stay; the reader's own comments too
+  const itemRows = ({ c, x }) => (c ? (ctx.quiet ? [] : calloutRows(ctx, c, nb, indent)) : commentRowsOf(ctx, x, nb));
   const mark = (row) => {
     const who = callouts.filter((c) => covers(row, c.side, c.from, c.to)).map((c) => c.source);
     if (here.some((x) => covers(row, x.loc.side, x.loc.line, x.loc.line))) who.push('comment');
@@ -396,7 +397,7 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
     rows.push({ ...row, segs: [...mark(row), ...row.segs] });
     for (const it of after.get(i) ?? []) rows.push(...itemRows(it));
   });
-  for (const n of notes.filter((y) => y.kind !== 'test')) rows.push(...noteRows(ctx, n, nb));
+  if (!ctx.quiet) for (const n of notes.filter((y) => y.kind !== 'test')) rows.push(...noteRows(ctx, n, nb));
   return rows;
 }
 
@@ -431,10 +432,10 @@ function signalSegs(list = [], labelWidth = 0) {
  * empty row above, and below when more follows (`after`).
  */
 const signalRows = (list = [], base = {}, { after = true } = {}) =>
-  list.length ? [spacer(base), ...list.map((s) => ({ kind: 'note', ...base, ...(s.pair ? { pair: s.pair } : {}), segs: [['  ', ''], ['┃', 'factbar'], ...signalSegs([s], Math.max(...list.map((x) => x.label.length)))] })), ...(after ? [spacer(base)] : [])] : [];
+  list.length ? [spacer(base), ...list.map((s) => ({ kind: 'note', ...base, callout: 'fr', ...(s.pair ? { pair: s.pair } : {}), segs: [['  ', ''], ['┃', 'factbar'], ...signalSegs([s], Math.max(...list.map((x) => x.label.length)))] })), ...(after ? [spacer(base)] : [])] : [];
 /** A file's signals under its title: done with once the file is reviewed and folded. */
 function fileSignalRows(ctx, f, { folded, units = unitsOf(f), base = {} }) {
-  if (folded && units.every(ctx.marked)) return [];
+  if (ctx.quiet || (folded && units.every(ctx.marked))) return [];
   return signalRows(ctx.sig.files.get(fid(f)), { repo: f.repo, fid: fid(f), ...base }, { after: !folded });
 }
 
@@ -719,11 +720,14 @@ function groupsLens(ctx) {
 /**
  * All rows. opts: width, layout ('auto'|'split'|'unified'), fold (Map id → bool: an
  * explicit fold or unfold; ids are fid, hunk keys, groupFoldId()), hl (highlightFiles()),
- * lens ('services'|'groups'), ann (checkAnnotations() plus {ann}: for the groups lens).
+ * lens ('services'|'groups'), ann (checkAnnotations() plus {ann}: for the groups lens),
+ * quiet (what sits in and around the code hidden: findings in the diff, fr's blocks, test
+ * intents, notes under hunks; their gutter marks stay. The intent, a group's why and a
+ * part's note stay: they are above the code, not in it).
  */
-export function buildRows(ws, st, { width = 120, layout = 'auto', fold = new Map(), hl = new Map(), tint = true, lens = 'services', ann = null } = {}) {
+export function buildRows(ws, st, { width = 120, layout = 'auto', fold = new Map(), hl = new Map(), tint = true, lens = 'services', ann = null, quiet = false } = {}) {
   if (lens === 'groups' && !ann?.groups?.length) lens = 'services';
-  const ctx = context(ws, st, { width, layout, fold, hl, tint, lens, ann });
+  const ctx = context(ws, st, { width, layout, fold, hl, tint, lens, ann, quiet });
   const body = lens === 'groups' ? groupsLens(ctx) : servicesLens(ctx);
   // notes on no hunk, or under a hunk this view does not show: never lost
   const rest = [...ctx.notes].filter(([u]) => !ctx.placed.has(u)).flatMap(([, list]) => list);

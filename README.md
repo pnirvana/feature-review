@@ -101,6 +101,7 @@ explain what fr has verified.
 | `]]` `[[` · `]h` `[h` · `]g` `[g` · `]c` `[c` | file (or part) · hunk · group (or service) · comment |
 | `gt` | from code to its test in the change, or back (`⏎` on a `TESTS` line: that file) |
 | `⏎` | on an unchanged caller in the diff: show its code, or hide it |
+| `a` | hide the annotations in and around the code: findings in the diff, fr's notes, test intents (their gutter marks stay; the intent, the groups' reasons and your comments stay); again: show them |
 | `space` `z` `Z` | fold the hunk · the file or group · all of them |
 | `c` · `e` · `x` | comment on the line (on a file line: the file) · edit · delete |
 | `o` | open the line in `$EDITOR` |

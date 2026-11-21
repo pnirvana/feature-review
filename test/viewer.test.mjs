@@ -260,3 +260,29 @@ test('⏎ on an unchanged caller in the diff shows its code, again hides it', as
   await term.type('\r');
   assert.ok(!term.screen().some(seedLine));
 });
+
+test('a hides the annotations and shows them again; the top line stays, the cursor keeps its line', async () => {
+  const { term } = await viewer({ rows: 40, cols: 130 });
+  await term.type('/', ...'seen.contains', '\r', '\x1b');
+  const before = { where: term.where(), top: term.screen()[1] };
+  assert.ok(term.screen().some((l) => /CALLER TO CHECK/.test(l)));
+  await term.type('a');
+  assert.match(term.screen()[0], /annotations hidden/);
+  assert.ok(!term.screen().some((l) => /CALLER TO CHECK|TEST CHANGED/.test(l)));
+  assert.ok(term.screen().some((l) => /▌.*public void refund\(String orderId, long amount/.test(l))); // the mark stays
+  assert.equal(term.where(), before.where);
+  assert.equal(term.screen()[1], before.top); // what is below closes up, as a fold does
+  await term.type('a');
+  assert.ok(term.screen().some((l) => /CALLER TO CHECK/.test(l)));
+});
+
+test('a on a note that goes away: the next line that stays; a again: back on the note', async () => {
+  const { term } = await viewer({ rows: 30, cols: 130 });
+  await term.type('/', ...'none found by name', '\r', '\x1b'); // fr's note under RefundRequest's part
+  assert.match(term.cursor().text, /NO TEST +none found by name/);
+  await term.type('a');
+  assert.match(term.cursor().text, /▾ @@ -0,0 \+1,3 @@/); // its hunk, the next line that stays
+  assert.ok(term.screen().some((l) => /RefundService\.refund skips a key it has seen/.test(l))); // the group's why stays
+  await term.type('a');
+  assert.match(term.cursor().text, /NO TEST +none found by name/);
+});

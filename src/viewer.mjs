@@ -32,6 +32,8 @@ const HELP = [
   'e x             on a comment: edit it / delete it (x twice)',
   'o               open the line in $EDITOR',
   's               side by side ↔ inline',
+  'a               hide the annotations in and around the code (findings, fr\'s notes, test intents; their',
+  '                gutter marks stay); the intent and the groups\' reasons stay. Again: show them',
   'r               reload (the worktrees and the review state; annotations reload by themselves)',
   '/  n N  esc     search, next / previous match, end the search',
   'q               quit',
@@ -70,6 +72,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     loading: false,
     highlighting: false,
     ov: null, // the overview when open: {tab, rows, cur, top, expanded}
+    quiet: false, // annotations hidden (a): the code alone
   };
 
   const W = () => out.columns || 100;
@@ -84,7 +87,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
   const lensNow = () => (ui.ann?.groups.length ? (ui.lens ?? 'groups') : 'services');
   /** The layout on screen: auto is split when the code is 110 columns wide (codeView), else unified. */
   const shownLayout = () => (ui.layout !== 'auto' ? ui.layout : opts().width - (lensNow() === 'groups' ? 2 : 0) >= 110 ? 'split' : 'unified');
-  const opts = () => ({ width: Math.max(30, W() - 2), layout: ui.layout, fold: ui.fold, hl: ui.hl, lens: lensNow(), ann: ui.ann });
+  const opts = () => ({ width: Math.max(30, W() - 2), layout: ui.layout, fold: ui.fold, hl: ui.hl, lens: lensNow(), ann: ui.ann, quiet: ui.quiet });
   function relayout(keep = rowKey(ui.rows[ui.cur])) {
     if (!ui.ws) return;
     ui.rows = buildRows(ui.ws, ui.st, opts());
@@ -200,6 +203,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
       [` ${ui.ws.name} `, 'bold'],
       [` reviewed ${done}/${all.length}`, all.length && done === all.length ? 'green bold' : ''],
       ...(ui.st.comments.length ? [[`  ${ui.st.comments.length} comment${ui.st.comments.length === 1 ? '' : 's'}`, 'magenta']] : []),
+      ...(ui.quiet ? [['  annotations hidden', 'yellow']] : []),
       [`  ${lensNow()} · ${shownLayout() === 'split' ? 'side by side' : 'inline'}${ui.layout === 'auto' ? ' (auto)' : ''}`, 'dim'],
       ...(ui.annError ? [['  annotations unreadable', 'red']] : ui.ann?.errors.length ? [[`  annotations: ${ui.ann.errors.length} error${ui.ann.errors.length === 1 ? '' : 's'}`, 'red']] : []),
       ...(ui.loading ? [['  reading…', 'dim']] : ui.highlighting ? [['  highlighting…', 'dim']] : []),
@@ -212,7 +216,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     const l = r.line && typeof r.line === 'object' ? `:${r.line.side === 'old' ? '-' : '+'}${r.line.n}` : '';
     return `${x.repo.name}/${x.f.file}${l}`;
   }
-  const KEYS = 'tab lens  m overview  j/k move  ]] file  ]u not reviewed  v reviewed  space fold  c comment  o editor  s layout  / search  ? help  q quit';
+  const KEYS = 'tab lens  m overview  a annotations  j/k move  ]] file  ]u not reviewed  v reviewed  space fold  c comment  o editor  s layout  / search  ? help  q quit';
   const OV_KEYS = 'h/l or 1-4 tab  j/k move  ⏎ to the code  m/esc back to the review  q quit';
   function footer() {
     const w = W();
@@ -626,6 +630,52 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     flash(`${to.length > 1 ? `${to.indexOf(target) + 1}/${to.length} ` : ''}${f.file}   gt: back`, 'dim');
   }
 
+  /**
+   * a: hide the annotations, or show them again. The line at the top of the screen stays,
+   * what is below closes up or opens out, as a fold does; the cursor stays on its line (on
+   * a line that goes away, the next one that stays). Shown again without moving: back
+   * exactly where it was.
+   */
+  function toggleQuiet() {
+    const old = ui.rows;
+    const from = { cur: ui.cur, top: ui.top };
+    const back = ui.quietBack;
+    ui.quiet = !ui.quiet;
+    relayout(null);
+    if (!ui.quiet && back && rowKey(old[from.cur]) === back.landed && ui.rows.length === back.n) {
+      ui.cur = back.cur;
+      ui.top = back.top;
+    } else {
+      // rows by key and occurrence (the lines of one note share a key): old row → new index
+      const occ = (rows) => {
+        const n = new Map();
+        return rows.map((r) => {
+          const k = rowKey(r);
+          n.set(k, (n.get(k) ?? 0) + 1);
+          return `${k}#${n.get(k)}`;
+        });
+      };
+      const at = new Map(occ(ui.rows).map((k, i) => [k, i]));
+      const oldKeys = occ(old);
+      const same = (j) => (nonEmpty(old[j]) ? (at.get(oldKeys[j]) ?? -1) : -1);
+      // the row of old that stays, from j down (else up): its new index
+      const stays = (j0) => {
+        for (let j = j0; j < old.length; j++) if (same(j) >= 0) return same(j);
+        for (let j = j0 - 1; j >= 0; j--) if (same(j) >= 0) return same(j);
+        return 0;
+      };
+      // the line at the top of the screen stays there, the rest closes up (or opens out)
+      // below it, as a fold does; the cursor moves with its line, in view
+      ui.cur = stays(from.cur);
+      ui.top = from.top === 0 ? 0 : stays(from.top);
+      const bodyH = Math.max(1, H() - 3);
+      if (ui.cur < ui.top) ui.top = ui.cur;
+      if (ui.cur >= ui.top + bodyH) ui.top = ui.cur - bodyH + 1;
+    }
+    ui.quietBack = ui.quiet ? { cur: from.cur, top: from.top, n: old.length, landed: rowKey(ui.rows[ui.cur]) } : null;
+    flash(ui.quiet ? 'annotations hidden: a shows them' : 'annotations shown');
+  }
+
   /** The fid of the file a unit (hunk key, or a hunkless file's key) belongs to. */
   function unitFile(unit) {
     for (const r of ui.ws?.repos ?? []) for (const f of r.files) if (f.key === unit || f.hunks.some((h) => h.key === unit)) return fid(f);
@@ -757,6 +807,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     else if (k === ' ') toggleFold();
     else if (k === 'z') toggleFold('outer');
     else if (k === 'm') openOverview();
+    else if (k === 'a') return toggleQuiet();
     else if (k === '\r' && ui.rows[ui.cur]?.pair) return jumpToPair(ui.rows[ui.cur].pair);
     else if (k === '\r' && ui.rows[ui.cur]?.expand) {
       // a finding naming code outside the change: show it in place, or hide it again
