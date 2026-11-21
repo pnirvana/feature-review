@@ -23,6 +23,7 @@ const HELP = [
   ']] [[           next / previous file    ]g [g  group (services lens: service)',
   ']h [h           next / previous hunk    ]u [u  next / previous hunk not reviewed yet',
   ']c [c           next / previous comment',
+  'gt              from code to its test in the change, or back (⏎ on a TESTS line: that file)',
   'v               reviewed: the hunk under the cursor (on a file, part or group line: all of it), then on',
   'V               reviewed: the whole file under the cursor (again: not reviewed)',
   'space           fold the hunk (on a file or group line: that)   z  the file or group   Z  all of them',
@@ -592,6 +593,38 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     ui.top = Math.max(0, ui.cur - screenRow);
     draw();
   }
+  /**
+   * gt: from code to its test in the change, or from a test to its code (on a signal row
+   * that names one: that one). Again: back. Several: each in turn.
+   */
+  function jumpToPair(targets = null) {
+    const here = ui.rows[ui.cur]?.fid;
+    const sig = ui.ws?.signals;
+    const to = targets ?? (here ? (sig?.codeOfTest.get(here) ?? sig?.testsOfCode.get(here)) : null) ?? [];
+    if (!to.length) return flash(here ? 'no test or code paired with this file in the change' : 'not on a file', 'dim');
+    // several: the one after the last jumped to from here
+    const last = ui.pairFrom === here ? to.indexOf(ui.pairTo) : -1;
+    const target = to[(last + 1) % to.length];
+    const f = fileById(target)?.f;
+    if (!f) return;
+    ui.fold.set(target, false);
+    const us = unitsOf(f);
+    if (lensNow() === 'groups') {
+      for (const { g, units } of ui.ann.groups) if (units.some((u) => us.includes(u))) ui.fold.set(groupFoldId(g.id), false);
+      ui.fold.set(groupFoldId(UNGROUPED), false);
+    }
+    relayout();
+    const heads = ['file', 'part'];
+    let i = ui.rows.findIndex((r) => r.fid === target && heads.includes(r.kind));
+    if (i < 0) i = ui.rows.findIndex((r) => r.fid === target);
+    if (i < 0) return flash(`${f.file} is not shown here`, 'yellow');
+    ui.cur = i;
+    ui.top = Math.max(0, i - 2);
+    ui.pairFrom = target;
+    ui.pairTo = here;
+    flash(`${to.length > 1 ? `${to.indexOf(target) + 1}/${to.length} ` : ''}${f.file}   gt: back`, 'dim');
+  }
+
   /** The fid of the file a unit (hunk key, or a hunkless file's key) belongs to. */
   function unitFile(unit) {
     for (const r of ui.ws?.repos ?? []) for (const f of r.files) if (f.key === unit || f.hunks.some((h) => h.key === unit)) return fid(f);
@@ -700,6 +733,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     const p = ui.pending;
     ui.pending = '';
     if (p === 'g' && k === 'g') (ui.cur = 0), move(0);
+    else if (p === 'g' && k === 't') return jumpToPair();
     else if (p === ']' || p === '[') {
       const dir = p === ']' ? 1 : -1;
       if (k === p) jump((r) => r.kind === 'file' || r.kind === 'part', dir);
@@ -722,6 +756,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     else if (k === ' ') toggleFold();
     else if (k === 'z') toggleFold('outer');
     else if (k === 'm') openOverview();
+    else if (k === '\r' && ui.rows[ui.cur]?.pair) return jumpToPair(ui.rows[ui.cur].pair);
     else if (k === '\t') {
       if (!ui.ann?.groups.length) return flash(ui.annError ? `annotations: ${ui.annError}` : `no groups: the agent writes them to ${annotationsPath(ui.ws.root)}`, 'yellow');
       return switchLens();

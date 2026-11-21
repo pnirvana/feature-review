@@ -164,13 +164,17 @@ async function repoFiles(r) {
 
 /**
  * The signals of a workspace (loadWorkspace()).
- * → {units: Map unit → [signal], files: Map "repo\0file" → [signal], mechanical: Set of units}
- * A signal is {kind, label (a badge, or null), text, level: 'fact' | 'warn' | 'info'}.
+ * → {units: Map unit → [signal], files: Map "repo\0file" → [signal], mechanical: Set of units,
+ *    codeOfTest: Map test file → [its code files in the change], testsOfCode: the other way}
+ * A signal is {kind, label (a badge), text, level: 'fact' | 'warn' | 'info', pair?: [file]
+ * (the paired test or code, a jump target)}; files are "repo\0file".
  */
 export async function computeSignals(ws) {
   const units = new Map();
   const files = new Map();
   const mechanical = new Set();
+  const codeOfTest = new Map();
+  const testsOfCode = new Map();
   const add = (map, k, s) => map.set(k, [...(map.get(k) ?? []), s]);
   const ids = new Map(unitIds(ws).map((u) => [u.unit, u.id]));
   const repos = ws.repos.filter((r) => !r.error);
@@ -224,7 +228,7 @@ export async function computeSignals(ws) {
         const names = (xs) => xs.map((t) => path.basename(t)).join(', ');
         if (!tests.length) add(files, fk(f), { kind: 'no-test', label: 'NO TEST', text: 'none found by name', level: 'info' });
         else if (!touched.length) add(files, fk(f), { kind: 'test-unchanged', label: 'TEST NOT CHANGED', text: names(tests), level: 'warn' });
-        else add(files, fk(f), { kind: 'test-changed', label: 'TEST CHANGED', text: names(touched), level: 'info' });
+        else add(files, fk(f), { kind: 'test-changed', label: 'TEST CHANGED', text: names(touched), level: 'info', pair: touched.map((t) => `${r.name}\0${t}`) });
       }
 
       // weakened tests: assertions removed or loosened, tests disabled, … (src/asserts.mjs)
@@ -242,11 +246,16 @@ export async function computeSignals(ws) {
         const s = testSubject(t.file);
         if (!s) continue;
         const code = codeChanged.get(subjectKey(s)) ?? [];
+        if (code.length) {
+          codeOfTest.set(fk(t), code.map(fk));
+          for (const f of code) testsOfCode.set(fk(f), [...(testsOfCode.get(fk(f)) ?? []), fk(t)]);
+        }
+        const pair = code.length ? { pair: code.map(fk) } : {};
         if (t.status === 'D') {
-          add(files, fk(t), { kind: 'test-deleted', label: 'TEST DELETED', text: code.length ? `${code.map((f) => path.basename(f.file)).join(', ')} changes too` : '', level: 'warn' });
+          add(files, fk(t), { kind: 'test-deleted', label: 'TEST DELETED', text: code.length ? `${code.map((f) => path.basename(f.file)).join(', ')} changes too` : '', level: 'warn', ...pair });
           continue;
         }
-        if (code.length) add(files, fk(t), { kind: 'tests', label: 'TESTS', text: `${code.map((f) => path.basename(f.file)).join(', ')}, changed too`, level: 'info' });
+        if (code.length) add(files, fk(t), { kind: 'tests', label: 'TESTS', text: `${code.map((f) => path.basename(f.file)).join(', ')}, changed too`, level: 'info', ...pair });
         if (!code.length) continue;
         // an existing test's lines changed or removed, with its code: the expected values may have been made to fit
         for (const h of t.hunks)
@@ -260,5 +269,5 @@ export async function computeSignals(ws) {
       }
     }),
   );
-  return { units, files, mechanical };
+  return { units, files, mechanical, codeOfTest, testsOfCode };
 }

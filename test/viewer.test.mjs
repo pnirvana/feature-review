@@ -155,6 +155,20 @@ test('tab without annotations says why there is no other lens', async () => {
   }
 });
 
+test('gt goes from code to its test and back; ⏎ on a TESTS line too', async () => {
+  const { term } = await viewer({ rows: 30 });
+  await term.type('\t', '/', ...'RefundService.java', '\r', '\x1b'); // the services lens, on the code's file
+  assert.match(term.cursor().text, /M {2}src\/main\/java\/shop\/refund\/RefundService\.java/);
+  await term.type('g', 't');
+  assert.match(term.cursor().text, /RefundServiceSpec\.groovy/);
+  await term.type('g', 't');
+  assert.match(term.cursor().text, /RefundService\.java/);
+  await term.type('g', 't', 'j'); // on the spec's TESTS line (empty rows are skipped)
+  assert.match(term.cursor().text, /TESTS +RefundService\.java, changed too/);
+  await term.type('\r');
+  assert.match(term.cursor().text, /M {2}src\/main\/java\/shop\/refund\/RefundService\.java/);
+});
+
 test('tab on a group heading goes to that group’s first hunk', async () => {
   const { term } = await viewer();
   await term.type(']', 'g', ']', 'g'); // group 2: the config

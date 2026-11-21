@@ -68,7 +68,8 @@ comments magenta), not the kind of fact. Only git is needed.
   `FooIT`, `FooSpec`, `test_foo.py`, `foo_test.py`, `foo.spec.ts`):
   - on a changed source file: `TEST CHANGED`, `TEST NOT CHANGED` or `NO TEST`, with the
     test's name (verified mechanical changes need none); on a test file: `TESTS` and its
-    code, when that changed too;
+    code, when that changed too. In the services lens a changed test comes right after
+    its code instead of in file order; `gt` jumps between the two in either lens;
   - `EXISTING TEST CHANGED` on a hunk that changes or removes lines of an existing test
     whose code changes too: the expected values may have been made to fit the code;
   - `TEST DELETED`.
@@ -98,6 +99,7 @@ explain what fr has verified.
 | `tab` | lens: the agent's groups, or the services |
 | `m` | the overview: design, names, contracts, rollout |
 | `]]` `[[` · `]h` `[h` · `]g` `[g` · `]c` `[c` | file (or part) · hunk · group (or service) · comment |
+| `gt` | from code to its test in the change, or back (`⏎` on a `TESTS` line: that file) |
 | `space` `z` `Z` | fold the hunk · the file or group · all of them |
 | `c` · `e` · `x` | comment on the line (on a file line: the file) · edit · delete |
 | `o` | open the line in `$EDITOR` |

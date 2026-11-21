@@ -345,7 +345,7 @@ function signalSegs(list = [], labelWidth = 0) {
  * empty row above, and below when more follows (`after`).
  */
 const signalRows = (list = [], base = {}, { after = true } = {}) =>
-  list.length ? [spacer(base), ...list.map((s) => ({ kind: 'note', ...base, segs: [['  ', ''], ['┃', 'factbar'], ...signalSegs([s], Math.max(...list.map((x) => x.label.length)))] })), ...(after ? [spacer(base)] : [])] : [];
+  list.length ? [spacer(base), ...list.map((s) => ({ kind: 'note', ...base, ...(s.pair ? { pair: s.pair } : {}), segs: [['  ', ''], ['┃', 'factbar'], ...signalSegs([s], Math.max(...list.map((x) => x.label.length)))] })), ...(after ? [spacer(base)] : [])] : [];
 /** A file's signals under its title: done with once the file is reviewed and folded. */
 function fileSignalRows(ctx, f, { folded, units = unitsOf(f), base = {} }) {
   if (folded && units.every(ctx.marked)) return [];
@@ -416,6 +416,30 @@ function summary(ctx, extra = []) {
 
 const progress = (done, n) => [`${done}/${n} reviewed`, n && done === n ? 'green bold' : ''];
 
+/**
+ * A repository's files in reading order: file order, except that a changed test comes
+ * right after the code it tests (after the last of it, when it tests several).
+ */
+export function filesInReadingOrder(r, sig) {
+  const at = new Map(r.files.map((f, i) => [fid(f), i]));
+  const after = new Map(); // code file → the tests to show after it
+  const moved = new Set();
+  for (const f of r.files) {
+    const code = (sig?.codeOfTest?.get(fid(f)) ?? []).filter((c) => at.has(c));
+    if (!code.length) continue;
+    const last = code.reduce((a, b) => (at.get(a) > at.get(b) ? a : b));
+    after.set(last, [...(after.get(last) ?? []), f]);
+    moved.add(fid(f));
+  }
+  const out = [];
+  for (const f of r.files) {
+    if (moved.has(fid(f))) continue;
+    out.push(f, ...(after.get(fid(f)) ?? []));
+  }
+  return out;
+}
+const allFiles = (ws) => ws.repos.flatMap((r) => filesInReadingOrder(r, ws.signals));
+
 function servicesLens(ctx) {
   const { ws, width, fold, marked } = ctx;
   const rows = [];
@@ -443,7 +467,7 @@ function servicesLens(ctx) {
     });
     if (r.error) return void rows.push(spacer(), { kind: 'error', repo: r.name, segs: [[' ' + r.error, 'red']] });
     if (!r.files.length) return void rows.push(spacer(), { kind: 'blank', repo: r.name, segs: [[' no changes', 'dim']] });
-    for (const f of r.files) {
+    for (const f of filesInReadingOrder(r, ws.signals)) {
       const base = { repo: r.name, fid: fid(f) };
       const folded = isFolded(fid(f), unitsOf(f).every(ctx.settled), fold);
       rows.push(spacer());
@@ -469,7 +493,7 @@ function citedRows(ctx, res, base) {
 
 /** The units in reading order for a lens: [{unit, fid, hunk (key or null), group (id or null)}]. */
 export function readingOrder(ws, ann, lens) {
-  const files = new Map(ws.repos.flatMap((r) => r.files.map((f) => [fid(f), f])));
+  const files = new Map(allFiles(ws).map((f) => [fid(f), f]));
   const byUnit = new Map();
   for (const f of files.values()) for (const u of unitsOf(f)) byUnit.set(u, f);
   const entry = (u, group) => ({ unit: u, fid: fid(byUnit.get(u)), hunk: byUnit.get(u).hunks.length ? u : null, group });
@@ -506,7 +530,7 @@ function groupsLens(ctx) {
   // inside a group: the guide bar takes the first columns
   const inner = { ...ctx, width: width - GUTTER };
   const rows = [];
-  const files = new Map(ws.repos.flatMap((r) => r.files.map((f) => [fid(f), f])));
+  const files = new Map(allFiles(ws).map((f) => [fid(f), f]));
   const fileOfUnit = new Map();
   for (const f of files.values()) for (const u of unitsOf(f)) fileOfUnit.set(u, f);
   const unitGroups = new Map();

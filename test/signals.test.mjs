@@ -75,6 +75,7 @@ before(async () => {
     'src/main/java/a/Tax.java': cls('Tax', '    long of(long x) { return x / 10; }\n'),
     'src/test/java/a/TaxTest.java': cls('TaxTest', '    void t() { assertEquals(10, new Tax().of(100)); }\n'),
     'app.py': 'def run(a):\n    if a:\n        go()\n    done()\n',
+    'src/main/java/a/Zone.java': cls('Zone', '    String id() { return "eu"; }\n'),
   });
   sh(wt, 'add', '-A');
   sh(wt, 'commit', '-q', '-m', 'base');
@@ -87,6 +88,7 @@ before(async () => {
     'src/main/java/a/Tax.java': cls('Tax', '    long of(long x) { return x / 5; }\n'),
     'src/test/java/a/TaxTest.java': cls('TaxTest', '    void t() { assertEquals(20, new Tax().of(100)); }\n'),
     'app.py': 'def run(a):\n    if a:\n        go()\n        done()\n',
+    'src/main/java/a/Zone.java': cls('Zone', '    String id() { return "us"; }\n'),
   });
   write(path.join(top, 'feature'), { 'feature-review.toml': 'base = "main"\n' });
   ws = await loadWorkspace(path.join(top, 'feature'));
@@ -128,6 +130,13 @@ test('the review shows the signals, and folds verified mechanical hunks', () => 
   assert.match(text, /EXPECTED VALUE CHANGED +10 → 20, with its code \(Tax\.java\)/);
   assert.doesNotMatch(text, /long sum = 0/); // the moved method is folded away
   assert.match(text, /return x \/ 5/); // the rest is not
+});
+
+test('a changed test comes right after its code, not in file order', () => {
+  const rows = buildRows(ws, { marks: {}, comments: [] }, { width: 140, tint: false, lens: 'services' });
+  const files = rows.filter((r) => r.kind === 'file').map((r) => plain(r.segs).match(/\S+\.(java|py)/)[0].split('/').pop());
+  assert.deepEqual(files, ['app.py', 'Billing.java', 'Format.java', 'Orders.java', 'Price.java', 'Tax.java', 'TaxTest.java', 'Zone.java']);
+  assert.deepEqual(ws.signals.codeOfTest.get('svc\0src/test/java/a/TaxTest.java'), ['svc\0src/main/java/a/Tax.java']);
 });
 
 // ---------- assertion heuristics ----------
