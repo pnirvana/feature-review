@@ -12,6 +12,7 @@ export const STYLE = {
   selected: '44;97', match: '22;30;43', matchcur: '22;30;46',
   red: 31, green: 32, yellow: 33, blue: 34, magenta: 35, cyan: 36, gray: 90,
   // diff tints, soft like diffview's DiffAdd / DiffDelete, the changed part (DiffText) stronger
+  cursorbg: '48;2;45;46;62', addbgcur: '48;2;50;80;60', delbgcur: '48;2;90;48;58',
   addbg: '48;2;35;52;40', delbg: '48;2;58;34;40', addword: '48;2;48;84;56', delword: '48;2;100;44;54',
   addfg: '38;5;114', delfg: '38;5;174', filler: '38;5;238',
   code: '38;5;180', link: '4;38;5;111',
@@ -66,6 +67,13 @@ export function fit(segs, width, fill = false) {
   if (fill && used < width) out += ' '.repeat(width - used);
   return out;
 }
+
+/** Does a style give a background? */
+export const hasBg = (names) =>
+  String(names ?? '')
+    .split(' ')
+    .map(code)
+    .some((c) => c !== null && /(^|;)(48;|4[0-7](;|$)|10[0-7](;|$))/.test(c));
 
 /** A line of segments as plain text. */
 export const plain = (segs) => segs.map(([t]) => t).join('');

@@ -413,8 +413,15 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
     });
     put(at, { x });
   }
-  // annotations hidden (quiet): the gutter marks stay; the reader's own comments too
-  const itemRows = ({ c, x }) => (c ? (ctx.quiet ? [] : calloutRows(ctx, c, nb, indentOf(c))) : commentRowsOf(ctx, x, nb));
+  // the bar at the far left: on a line something is said about, and on down through what is
+  // said (its rows), so a line and its notes read as one; with the notes hidden (a) it stays
+  // on the line
+  const bar = (list, style) =>
+    list.map((r) => {
+      const [t, st, ...more] = r.segs[0] ?? ['', ''];
+      return t.startsWith(' ') ? { ...r, segs: [['▌', style], [t.slice(1), st, ...more], ...r.segs.slice(1)] } : r;
+    });
+  const itemRows = ({ c, x }) => (c ? (ctx.quiet ? [] : bar(calloutRows(ctx, c, nb, indentOf(c)), MARK[c.source])) : bar(commentRowsOf(ctx, x, nb), MARK.comment));
   const mark = (row) => {
     const who = callouts.filter((c) => covers(row, c.side, c.from, c.to)).map((c) => c.source);
     if (here.some((x) => covers(row, x.loc.side, x.loc.line, x.loc.line))) who.push('comment');

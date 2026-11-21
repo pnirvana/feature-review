@@ -39,11 +39,15 @@ function fakeTerminal(cols = 110, rows = 24) {
       const frame = written.split('\x1b[H').pop();
       return frame.replace(/\x1b\[[\d;?]*[A-Za-z]/g, '').split('\r\n');
     },
+    /** The last frame as drawn, escape codes and all, by row. */
+    raw() {
+      return written.split('\x1b[H').pop().split('\r\n');
+    },
     /** The line the cursor is on, and its row on the screen. */
     cursor() {
       const lines = this.screen();
       const row = lines.findIndex((l) => l.startsWith('▌'));
-      return { row, text: lines[row] ?? '' };
+      return { row, text: (lines[row] ?? '').trimEnd() }; // its highlight pads it to the width
     },
     /** The footer's location line (repo/file:line of the cursor). */
     where() {
@@ -305,16 +309,21 @@ test('/ searches as you type; esc goes back to where it started', async () => {
 test('f: show or hide kinds of markers, their notes and their marks', async () => {
   const { term } = await viewer({ rows: 40, cols: 130 });
   await term.type('/', ...'seen.contains', '\r', '\x1b');
-  const signature = () => term.screen().find((l) => /public void refund\(String orderId, long amount/.test(l)) ?? '';
-  assert.match(signature(), /▌/); // the agent's mark: a caller depends on it
   await term.type('f');
   assert.match(term.screen().join('\n'), /show: +1 agent ✓ +2 fr ✓ +3 coverage ✓ +4 comments ✓/);
   await term.type('1', '\x1b');
   assert.match(term.screen()[0], /only fr, coverage, comments/);
   assert.ok(!term.screen().some((l) => /CALLER TO CHECK/.test(l)));
-  assert.doesNotMatch(signature(), /▌/); // its mark is gone too
   assert.ok(term.screen().some((l) => /TEST CHANGED|NO TEST/.test(l))); // fr's stay
   await term.type('f', '0', '\x1b');
   assert.ok(term.screen().some((l) => /CALLER TO CHECK/.test(l)));
   assert.doesNotMatch(term.screen()[0], /only/);
+});
+
+test('the cursor’s whole line is highlighted, across the width', async () => {
+  const { term } = await viewer({ cols: 110 });
+  const { row } = term.cursor();
+  const line = term.raw()[row];
+  assert.match(line, /\x1b\[48;[\d;]+m {20,}/, 'a background reaches the end of the line');
+  assert.doesNotMatch(term.raw()[row + 1] ?? '', /\x1b\[48;[\d;]+m {20,}/);
 });

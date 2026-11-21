@@ -76,6 +76,7 @@ before(async () => {
     'src/test/java/a/TaxTest.java': cls('TaxTest', '    void t() { assertEquals(10, new Tax().of(100)); }\n'),
     'app.py': 'def run(a):\n    if a:\n        go()\n    done()\n',
     'src/main/java/a/Zone.java': cls('Zone', '    String id() { return "eu"; }\n'),
+    'src/main/java/a/Gate.java': cls('Gate', '    long f(long x) {\n        return x;\n    }\n'),
     '.gitignore': 'target/\n',
   });
   sh(wt, 'add', '-A');
@@ -90,6 +91,7 @@ before(async () => {
     'src/test/java/a/TaxTest.java': cls('TaxTest', '    void t() { assertEquals(20, new Tax().of(100)); }\n'),
     'app.py': 'def run(a):\n    if a:\n        go()\n        done()\n',
     'src/main/java/a/Zone.java': cls('Zone', '    String id() { return "us"; }\n'),
+    'src/main/java/a/Gate.java': cls('Gate', '    long f(long x) {\n        if (x < 0) {\n            return 0;\n        }\n        return x;\n    }\n'),
   });
   write(path.join(top, 'feature'), { 'feature-review.toml': 'base = "main"\n' });
   ws = await loadWorkspace(path.join(top, 'feature'));
@@ -128,7 +130,7 @@ test('the review shows the signals, and folds verified mechanical hunks', () => 
   const text = rows.map((r) => plain(r.segs)).join('\n');
   assert.match(text, /Orders\.java .*MECHANICAL {2}verified: moved/);
   assert.match(text, /Format\.java .*MECHANICAL {2}verified: whitespace only/);
-  assert.match(text, /EXPECTED VALUE CHANGED[\s┃│]*10 → 20, with its code/);
+  assert.match(text, /EXPECTED VALUE CHANGED[\s┃│▌]*10 → 20, with its code/);
   assert.doesNotMatch(text, /long sum = 0/); // the moved method is folded away
   assert.match(text, /return x \/ 5/); // the rest is not
 });
@@ -136,7 +138,7 @@ test('the review shows the signals, and folds verified mechanical hunks', () => 
 test('a changed test comes right after its code, not in file order', () => {
   const rows = buildRows(ws, { marks: {}, comments: [] }, { width: 140, tint: false, lens: 'services' });
   const files = rows.filter((r) => r.kind === 'file').map((r) => plain(r.segs).match(/\S+\.(java|py)/)[0].split('/').pop());
-  assert.deepEqual(files, ['app.py', 'Billing.java', 'Format.java', 'Orders.java', 'Price.java', 'Tax.java', 'TaxTest.java', 'Zone.java']);
+  assert.deepEqual(files, ['app.py', 'Billing.java', 'Format.java', 'Gate.java', 'Orders.java', 'Price.java', 'Tax.java', 'TaxTest.java', 'Zone.java']);
   assert.deepEqual(ws.signals.codeOfTest.get('svc\0src/test/java/a/TaxTest.java'), ['svc\0src/main/java/a/Tax.java']);
 });
 
@@ -162,20 +164,23 @@ test('JaCoCo: the report is read per file and line; reports are found in Maven a
 test('coverage of the changed lines: marked in the gutter, summed per hunk; an older report is not trusted', async () => {
   const wt = path.join(top, 'feature', 'svc');
   const report = path.join(wt, 'target/site/jacoco/jacoco.xml');
-  write(wt, { 'target/site/jacoco/jacoco.xml': jacoco({ 'Tax.java': [[4, 0, 3]], 'Price.java': [[4, 2, 0]], 'Zone.java': [[4, 0, 2, 1, 1]] }) });
+  write(wt, { 'target/site/jacoco/jacoco.xml': jacoco({ 'Tax.java': [[4, 0, 3]], 'Price.java': [[4, 2, 0]], 'Zone.java': [[4, 0, 2, 1, 1]], 'Gate.java': [[4, 0, 2], [5, 0, 2, 1, 1], [6, 2, 0], [8, 0, 2]] }) });
   const later = new Date(Date.now() + 60_000);
   fs.utimesSync(report, later, later);
   const w = await loadWorkspace(path.join(top, 'feature'));
   const kinds = (file) => (w.signals.units.get(w.repos[0].files.find((f) => f.file === file).hunks[0].key) ?? []).map((x) => `${x.kind}: ${x.text}`);
   assert.deepEqual(kinds('src/main/java/a/Tax.java'), ['covered: a test runs all 1 changed lines']);
-  assert.deepEqual(kinds('src/main/java/a/Price.java'), ['not-covered: 1 of 1 changed lines no test runs']);
-  assert.deepEqual(kinds('src/main/java/a/Zone.java'), ['partly-covered: on 1 of 1 changed lines', 'branch-not-taken: the tests always go the same way here (JaCoCo does not say which)']);
-  const zone = buildRows(w, { marks: {}, comments: [] }, { width: 140, tint: false, lens: 'services' });
-  const callout = zone.findIndex((r) => /1 OF 2 BRANCHES NOT TAKEN/.test(plain(r.segs)));
-  assert.equal(zone[callout - 1].at?.new, 4); // under the line, in the diff
+  assert.deepEqual(kinds('src/main/java/a/Price.java'), ['not-covered: 1 of 1 changed lines · not run: 4']);
+  // a branch not taken on a line that is no if: the dot alone says it
+  assert.deepEqual(kinds('src/main/java/a/Zone.java'), ['partly-covered: 1 of 1 changed lines · branches not taken: 4']);
+  // an if whose body never ran: never entered, said under it
+  assert.deepEqual(kinds('src/main/java/a/Gate.java'), ['not-covered: 1 of 2 changed lines · not run: 6; branches not taken: 5', 'branch-not-taken: no test enters this if']);
+  const gate = buildRows(w, { marks: {}, comments: [] }, { width: 140, tint: false, lens: 'services' });
+  const callout = gate.findIndex((r) => /NEVER ENTERED +no test enters this if/.test(plain(r.segs)));
+  assert.equal(gate[callout - 1].at?.new, 5); // under the if
   // side by side: under the new side, where its line and coverage mark are
-  const divider = plain(zone[callout - 1].segs).indexOf('│');
-  assert.ok(plain(zone[callout].segs).indexOf('┃') > divider, 'the note starts right of the divider');
+  const divider = plain(gate[callout - 1].segs).indexOf('│');
+  assert.ok(plain(gate[callout].segs).indexOf('┃') > divider, 'the note starts right of the divider');
   assert.equal(w.signals.reports.get('svc').length, 1);
   const rows = buildRows(w, { marks: {}, comments: [] }, { width: 140, tint: false, lens: 'services' });
   const priceLine = rows.find((r) => r.kind === 'code' && r.fid === 'svc\0src/main/java/a/Price.java' && r.at?.new === 4);
@@ -191,7 +196,7 @@ test('coverage of the changed lines: marked in the gutter, summed per hunk; an o
   const only = buildRows(w, { marks: {}, comments: [] }, { width: 140, tint: false, lens: 'services', show: { agent: false, fr: false, comments: false } });
   const t = only.map((r) => plain(r.segs)).join('\n');
   assert.match(t, /NOT COVERED/);
-  assert.match(t, /1 OF 2 BRANCHES NOT TAKEN/);
+  assert.match(t, /NEVER ENTERED/);
   assert.doesNotMatch(t, /TEST NOT CHANGED|EXPECTED VALUE CHANGED/);
   const noCov = buildRows(w, { marks: {}, comments: [] }, { width: 140, tint: false, lens: 'services', layout: 'unified', show: { coverage: false } });
   assert.ok(!noCov.some((r) => r.kind === 'code' && r.segs.some(([x]) => /[●◐○]/.test(x))));

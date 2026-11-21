@@ -92,9 +92,11 @@ comments magenta), not the kind of fact. Only git is needed.
   `<dir>/feature-review.toml`). Each added line gets a dot right after its number: `●`
   a test runs it, `◐` some branches are not taken, `○` no test runs it (a shape apart
   from the bars `▌` of findings in the gutter). Each hunk says `NOT COVERED 2 of 8
-  changed lines`, `BRANCHES NOT TAKEN` or `COVERED`. Under each line with a branch no
-  test takes: `1 OF 2 BRANCHES NOT TAKEN` (JaCoCo counts them, it does not say which:
-  for an `if`, the tests always found the condition true, or always false). Several reports are merged. A report
+  changed lines · not run: 7, 14, 18-19; branches not taken: 5, 13`, `BRANCHES NOT
+  TAKEN` or `COVERED`. JaCoCo counts a line's branches but does not say which was not
+  taken; where the code says it, fr does, under the line: an `if` or loop whose body
+  never ran is `NEVER ENTERED`, one whose body ran but was never skipped `NEVER
+  SKIPPED`. Elsewhere the `◐` alone says it. Several reports are merged. A report
   older than a file marks nothing in it (`COVERAGE OUT OF DATE`: its line numbers may
   have moved). The service's heading says how old the reports are, or that there is none.
 

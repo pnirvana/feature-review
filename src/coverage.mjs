@@ -81,7 +81,8 @@ export const lineState = (l) => (l.ci > 0 ? (l.mb > 0 ? 'partly' : 'covered') : 
 
 /**
  * The coverage of a repository's changed files. manifest: the feature's settings.
- * → {reports: [{file, mtime}], files: Map "repo\0file" → {lines: Map new line → state,
+ * → {reports: [{file, mtime}], files: Map "repo\0file" → {lines: Map new line → state (the
+ * lines the hunks show on the new side),
  * branches: Map new line → {missed, taken} (lines with branches not taken), stale: bool,
  * report: file}} (only files a report knows)
  */
@@ -127,7 +128,7 @@ export function repoCoverage(r, manifest = {}) {
     const branches = new Map();
     for (const h of f.hunks)
       for (const [t, , , n] of h.lines) {
-        if (t !== '+') continue;
+        if (t === '-') continue; // every line the hunk shows on the new side (an if's body may be unchanged)
         const l = m.lines.get(n);
         const s = l && lineState(l);
         if (s) lines.set(n, s);

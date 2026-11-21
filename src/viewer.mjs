@@ -12,7 +12,7 @@ const LAYER_NAMES = { agent: 'agent', fr: 'fr', coverage: 'coverage', comments: 
 import { annotationsPath, readAnnotations, checkAnnotations } from './annotations.mjs';
 import { queryColors, applyTheme } from './ui/theme.mjs';
 import { overviewRows, tabBar, TABS } from './overview.mjs';
-import { ESC, fit, plain, charWidth, strWidth, segsWidth } from './md/term.mjs';
+import { ESC, fit, plain, charWidth, strWidth, segsWidth, hasBg } from './md/term.mjs';
 import { textField, keyField, fieldText, fieldRows, fieldMode } from './ui/textfield.mjs';
 
 
@@ -284,13 +284,28 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
         const idx = ui.top + i;
         const g = idx === ui.cur ? [['▌', 'cyan bold']] : hits.has(idx) ? [['›', 'yellow']] : [[' ', '']];
         const segs = hits.has(idx) && ui.search ? markMatches(r.segs, ui.search.q, idx === ui.cur) : r.segs;
-        return [...g, [' ', ''], ...segs];
+        return idx === ui.cur ? cursorLine([...g, [' ', ''], ...segs], w) : [...g, [' ', ''], ...segs];
       });
     }
     const lines = [...head, ...body.slice(0, bodyH)];
     while (lines.length < head.length + bodyH) lines.push([]);
     lines.push(...foot);
     out.write(`${ESC}H` + lines.map((l) => fit(l, w) + `${ESC}K`).join('\r\n') + `${ESC}J`);
+  }
+
+  /**
+   * The cursor's line, highlighted across the width: a soft tint where it has no background
+   * of its own; an added or removed line keeps its colour, a little stronger.
+   */
+  function cursorLine(segs, w) {
+    const out = segs.map(([t, st, ...more]) => {
+      const s = String(st ?? '');
+      if (/\baddbg\b/.test(s)) return [t, s.replace(/\baddbg\b/, 'addbgcur'), ...more];
+      if (/\bdelbg\b/.test(s)) return [t, s.replace(/\bdelbg\b/, 'delbgcur'), ...more];
+      return hasBg(s) ? [t, s, ...more] : [t, `${s} cursorbg`.trim(), ...more];
+    });
+    const used = segsWidth(out);
+    return used < w ? [...out, [' '.repeat(w - used), 'cursorbg']] : out;
   }
 
   // ---------- search ----------

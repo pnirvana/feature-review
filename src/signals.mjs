@@ -16,6 +16,17 @@ import { unitIds } from './annotations.mjs';
 const COVERAGE_KINDS = new Set(['covered', 'not-covered', 'partly-covered', 'branch-not-taken', 'coverage-stale']);
 export const signalLayer = (s) => (COVERAGE_KINDS.has(s.kind) ? 'coverage' : 'fr');
 
+/** Line numbers as short spans: [7, 14, 18, 19] → "7, 14, 18-19". */
+export function spans(ns) {
+  const out = [];
+  for (const n of [...ns].sort((a, b) => a - b)) {
+    const last = out[out.length - 1];
+    if (last && n === last[1] + 1) last[1] = n;
+    else out.push([n, n]);
+  }
+  return out.map(([a, b]) => (a === b ? `${a}` : `${a}-${b}`)).join(', ');
+}
+
 // ---------- mechanical ----------
 
 /** Files where indentation is meaning (Python, YAML, Makefiles): a change of it is not whitespace only. */
@@ -232,23 +243,32 @@ export async function computeSignals(ws) {
       }
       for (const h of f.hunks) {
         if (mechanical.has(h.key)) continue;
-        const states = h.lines.filter(([t]) => t === '+').map(([, , , n]) => c.lines.get(n)).filter(Boolean);
-        if (!states.length) continue;
-        const missed = states.filter((s) => s === 'missed').length;
-        const partly = states.filter((s) => s === 'partly').length;
-        const n = states.length;
-        if (missed) add(units, h.key, { kind: 'not-covered', label: 'NOT COVERED', text: `${missed} of ${n} changed lines no test runs${partly ? `, ${partly} with branches not taken` : ''}`, level: 'warn' });
-        else if (partly) add(units, h.key, { kind: 'partly-covered', label: 'BRANCHES NOT TAKEN', text: `on ${partly} of ${n} changed lines`, level: 'warn' });
+        const added = h.lines.filter(([t]) => t === '+').map(([, , , n]) => n).filter((n) => c.lines.has(n));
+        if (!added.length) continue;
+        const missed = added.filter((n) => c.lines.get(n) === 'missed');
+        const partly = added.filter((n) => c.lines.get(n) === 'partly');
+        const n = added.length;
+        // the lines by number, to find them without scanning for the dots
+        const where = [missed.length && `not run: ${spans(missed)}`, partly.length && `branches not taken: ${spans(partly)}`].filter(Boolean).join('; ');
+        if (missed.length) add(units, h.key, { kind: 'not-covered', label: 'NOT COVERED', text: `${missed.length} of ${n} changed lines · ${where}`, level: 'warn' });
+        else if (partly.length) add(units, h.key, { kind: 'partly-covered', label: 'BRANCHES NOT TAKEN', text: `${partly.length} of ${n} changed lines · ${where}`, level: 'warn' });
         else add(units, h.key, { kind: 'covered', label: 'COVERED', text: `a test runs all ${n} changed lines`, level: 'info' });
-        // under each line with branches not taken: how many (JaCoCo counts them, it does not say which)
-        for (const [t, , , ln] of h.lines) {
-          const b = t === '+' && c.branches?.get(ln);
-          if (!b) continue;
-          const all = b.missed + b.taken;
+        // under a line with a branch not taken, when the code says which: an if or loop whose
+        // body never ran was never entered; whose body ran, never skipped (two branches only)
+        for (const ln of partly) {
+          const b = c.branches.get(ln);
+          const at = h.lines.findIndex(([t, , , x]) => t !== '-' && x === ln);
+          const text = h.lines[at][1];
+          const kw = text.match(/^\s*(?:\}\s*else\s+)?(if|while|for)\b.*\{\s*$/)?.[1];
+          if (!kw || b.missed + b.taken !== 2) continue;
+          const body = h.lines.slice(at + 1).find(([t, s]) => t !== '-' && /[\p{L}\p{N}]/u.test(s));
+          const ran = body && c.lines.get(body[3]);
+          if (!ran) continue;
+          const what = kw === 'if' ? 'this if' : 'this loop';
           add(units, h.key, {
             kind: 'branch-not-taken',
-            label: `${b.missed} OF ${all} BRANCHES NOT TAKEN`,
-            text: `${b.taken === 1 ? 'the tests always go the same way here' : `the tests go ${b.taken} of ${all} ways here`} (JaCoCo does not say which)`,
+            label: ran === 'missed' ? 'NEVER ENTERED' : 'NEVER SKIPPED',
+            text: ran === 'missed' ? `no test enters ${what}` : `every test enters ${what}`,
             level: 'warn',
             at: { side: 'new', line: ln },
           });

@@ -116,6 +116,10 @@ export function makeStyles(colors) {
     markagent: fg(c.cyan),
     markcomment: fg(c.magenta),
     // the diff, as diffview tints it: soft line backgrounds, the changed part stronger
+    // the cursor's line: a soft tint; on an added or removed line, its own tint a little stronger
+    cursorbg: bg(mix(c.bg, c.fg, light ? 0.1 : 0.09)),
+    addbgcur: bg(mix(c.bg, c.green, 0.3 * k)),
+    delbgcur: bg(mix(c.bg, c.red, 0.3 * k)),
     addbg: bg(mix(c.bg, c.green, 0.16 * k)),
     delbg: bg(mix(c.bg, c.red, 0.16 * k)),
     addword: bg(mix(c.bg, c.green, 0.34 * k)),

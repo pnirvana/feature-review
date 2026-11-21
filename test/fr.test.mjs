@@ -357,7 +357,9 @@ test('findings sit under their line in the diff; the test intent before its code
     assert.match(plain(rows[ghost].segs) + plain(rows[ghost + 1].segs), /RefundService\.java:4-6/); // beside the badge, or below it
     assert.equal(rows[ghost].hunk, rs);
     assert.deepEqual(rows[ghost - 1].at, { old: null, new: 4 }, `${lens}: right under new line 4`);
-    assert.match(plain(rows[ghost - 1].segs), /^▎? *▌/, `${lens}: the line is marked`);
+    // one bar down the line and its note
+    assert.match(plain(rows[ghost - 1].segs).slice(0, 4), /▌/, `${lens}: the line is marked`);
+    assert.match(plain(rows[ghost].segs).slice(0, 4), /▌/, `${lens}: and its note`);
     assert.ok(rows.slice(ghost + 1).some((r) => r.kind === 'code' && r.hunk === rs), `${lens}: inside the hunk, not after it`);
     // the agent's flag on the old line 11 of the spec, and fr's own on new line 12
     const flag = rows.findIndex((r) => /┃ +LOOSENED/.test(plain(r.segs)));
@@ -373,7 +375,10 @@ test('findings sit under their line in the diff; the test intent before its code
     const found = rows.findIndex((r) => /┃ +DELETED CHECK +The amount <= 0 check is gone/.test(plain(r.segs)));
     assert.equal(rows[found - 1].at?.old, 9, `${lens}: under old line 9`);
     const marked = rows.filter((r) => r.kind === 'code' && [7, 8, 9].includes(r.at?.old) && /▌/.test(plain(r.segs).slice(0, 4)));
-    assert.equal(marked.length, 3, `${lens}: lines 7-9 marked`);
+    assert.equal(marked.length, 3, `${lens}: lines 7-9 marked (a range)`);
+    // the agent's markers hidden (f): the marks go with the notes
+    const noAgent = buildRows(ws, { marks: {}, comments: [] }, { width: 110, tint: false, lens, ann: checked, show: { agent: false } });
+    assert.ok(!noAgent.some((r) => r.kind === 'code' && [7, 8, 9].includes(r.at?.old) && /▌/.test(plain(r.segs).slice(0, 4))), `${lens}: no marks`);
     assert.doesNotMatch(text(rows), /Other notes/);
   }
   // folded: the count on the title
