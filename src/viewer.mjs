@@ -322,7 +322,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
   const isUnitStart = (r) => r.kind === 'hunk' || (r.kind === 'blank' && r.units?.length);
 
   /** The next (or previous) unit not reviewed, in reading order: unfold it and go there. */
-  function nextUnreviewed(dir = 1, fromRow = ui.cur) {
+  function nextUnreviewed(dir = 1, fromRow = ui.cur, keep = null) {
     const all = order();
     const groupOf = (r) => (r.group === UNGROUPED ? null : (r.group ?? null));
     const sameGroup = (u, r) => lensNow() !== 'groups' || u.group === groupOf(r);
@@ -351,12 +351,28 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     let i = ui.rows.findIndex((x, k) => k >= from && (u.hunk ? x.kind === 'hunk' && x.hunk === u.hunk : x.units?.includes(u.unit) && ['file', 'blank'].includes(x.kind)));
     if (i < 0) i = ui.rows.findIndex((x) => (u.hunk ? x.kind === 'hunk' && x.hunk === u.hunk : x.fid === u.fid));
     if (i >= 0) ui.cur = i;
-    // scroll so the whole hunk shows, when it fits
-    if (i < 0 || !u.hunk) return;
+    if (i >= 0) bringIntoView(i, u.hunk, keep);
+  }
+
+  /**
+   * Show row i (a hunk's title): if the hunk already shows whole, nothing moves; else the
+   * screen scrolls so its heading (the part, file or group line just above) is at the top,
+   * the same place every time.
+   */
+  function bringIntoView(i, hunk, keep = null) {
+    const bodyH = Math.max(1, H() - 3);
     let end = i;
-    while (end + 1 < ui.rows.length && ui.rows[end + 1].hunk === u.hunk) end++;
-    const bodyH = H() - 3;
-    if (end - i < bodyH && end >= ui.top + bodyH) ui.top = end - bodyH + 1;
+    while (hunk && end + 1 < ui.rows.length && ui.rows[end + 1].hunk === hunk) end++;
+    if (i >= ui.top && end < ui.top + bodyH) return;
+    // the row to keep in view (the hunk just reviewed), at the top, when the next hunk then fits
+    if (keep !== null && keep < i && end - keep < bodyH) return void (ui.top = keep);
+    let head = i;
+    for (let j = i - 1; j >= Math.max(0, i - 6); j--)
+      if (['part', 'file', 'group'].includes(ui.rows[j].kind)) {
+        head = j;
+        break;
+      }
+    ui.top = Math.max(0, head - 1);
   }
 
   // ---------- the overview ----------
@@ -503,9 +519,13 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     const g = r.group && ui.rows.find((x) => x.kind === 'group' && x.group === r.group);
     if (g && (!on || g.units.every(marked))) ui.fold.delete(groupFoldId(r.group));
     const n = `${keys.length} ${keys.length === 1 ? 'hunk' : 'hunks'}`;
-    relayout(rowKey(r));
+    // the line that stays put: the hunk's title where it is on screen (else the cursor's line)
+    const title = r.hunk && !HEADS.includes(r.kind) ? ui.rows.findIndex((x) => x.kind === 'hunk' && x.hunk === r.hunk && x.group === r.group) : ui.cur;
+    const screenRow = (title >= ui.top ? title : ui.cur) - ui.top;
+    relayout(r.hunk && !HEADS.includes(r.kind) ? rowKey({ kind: 'hunk', group: r.group, fid: r.fid, hunk: r.hunk }) : rowKey(r));
+    ui.top = Math.max(0, ui.cur - screenRow);
     if (on) {
-      nextUnreviewed(1, ui.cur);
+      nextUnreviewed(1, ui.cur, ui.cur);
       flash(`${n} reviewed`);
     } else flash(`${n} no longer reviewed`, 'yellow');
   }

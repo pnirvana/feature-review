@@ -95,6 +95,38 @@ test('the review flow: ]u goes to a hunk not reviewed, v marks it and goes on', 
   assert.match(term.screen()[0], /reviewed 1\/9/);
 });
 
+test('v: the reviewed hunk folds where it is, the next one shows below it', async () => {
+  const { term } = await viewer({ rows: 30 });
+  await term.type(']', 'u', 'v', 'j', 'j', 'j'); // in RefundController's code
+  await term.type('v');
+  const s = term.screen();
+  const reviewed = s.findIndex((l) => /@@ -2,11 \+2,8 @@.*✓ reviewed/.test(l));
+  const cur = term.cursor().row;
+  assert.ok(reviewed > 0 && reviewed < cur, `the reviewed hunk (${reviewed}) shows above the next one (${cur})`);
+  assert.match(term.cursor().text, /@@ -1,7 \+1,9 @@/); // RefundService: the next not reviewed
+});
+
+test('v when the next hunk does not fit: its heading goes to the top', async () => {
+  const { term } = await viewer({ rows: 14 });
+  await term.type(']', 'u', 'v', 'j', 'v');
+  const s = term.screen();
+  assert.match(s.slice(1, 4).join('\n'), /IMPLEMENTATION +refund-service\/src\/main\/java\/shop\/refund\/RefundService\.java/);
+  assert.match(term.cursor().text, /@@ -1,7 \+1,9 @@/);
+});
+
+test('v on a reviewed hunk: not reviewed again, the cursor stays on the same line', async () => {
+  const { term } = await viewer({ rows: 24 });
+  await term.type(']', 'u', 'v', 'k', 'k', 'k'); // back on RefundRequest's folded hunk
+  const before = term.cursor();
+  assert.match(before.text, /@@ -0,0 \+1,3 @@ +✓ reviewed/);
+  await term.type('v');
+  const after = term.cursor();
+  assert.equal(after.row, before.row);
+  assert.match(after.text, /▾ @@ -0,0 \+1,3 @@$/);
+  assert.ok(term.screen().some((l) => /public record RefundRequest/.test(l))); // unfolded below
+  assert.equal(Object.keys(readState(dir).marks).length, 0);
+});
+
 test('tab keeps the cursor on the same line and the same screen row', async () => {
   const { term } = await viewer({ rows: 24 });
   await term.type(']', 'u', 'v', 'v'); // on to RefundService's hunk
