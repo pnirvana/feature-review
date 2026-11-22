@@ -11,11 +11,13 @@ import { fit, plain } from '../src/md/term.mjs';
 import { loadConfig, initConfig, SETTINGS } from '../src/config.mjs';
 import { configureTheme } from '../src/ui/theme.mjs';
 import { overviewRows, TABS } from '../src/overview.mjs';
+import { feedbackPath, readFeedback, feedbackReport, parseSince } from '../src/feedback.mjs';
 
 const USAGE = `usage: fr [dir] [options]          the viewer (or --print)
        fr hunks [dir] [--json]      the hunks with their ids, for citing them
        fr check [dir] [--stamp]     check the annotation file
        fr config [init]             the settings in effect; init writes the settings file
+       fr feedback [--since 2w] [--json]  what the feedback key (!) recorded, by kind
 
 <dir> (default: the current directory) is a parent directory with one git worktree
 per service, or a single worktree. Each worktree is compared from its merge base with
@@ -39,7 +41,8 @@ options:
   --lens L          groups | services (default groups, when there are annotations)
   --highlight M     auto | bat | builtin | none (default auto: bat if installed)
                     (these three override the settings file)
-  --json            with hunks and check: JSON output
+  --since T         with feedback: only entries since T (2w, 10d, 36h or a date)
+  --json            with hunks, check and feedback: JSON output
   -h, --help        this help
 
 Review state (marks, comments) is kept in <dir>/.feature-review/.`;
@@ -58,6 +61,7 @@ try {
       highlight: { type: 'string' },
       json: { type: 'boolean' },
       stamp: { type: 'boolean' },
+      since: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   });
@@ -71,7 +75,7 @@ if (o.help) {
   process.exit(0);
 }
 const pos = [...args.positionals];
-const cmd = ['hunks', 'check', 'config'].includes(pos[0]) ? pos.shift() : 'view';
+const cmd = ['hunks', 'check', 'config', 'feedback'].includes(pos[0]) ? pos.shift() : 'view';
 let cfg;
 try {
   cfg = loadConfig({ flags: { layout: o.layout, lens: o.lens, highlight: o.highlight } });
@@ -80,7 +84,7 @@ try {
   process.exit(2);
 }
 const set = cfg.values;
-const dir = path.resolve(cmd === 'config' ? '.' : (pos[0] ?? '.'));
+const dir = path.resolve(cmd === 'config' || cmd === 'feedback' ? '.' : (pos[0] ?? '.'));
 // piped into head or less that quits early: not an error
 process.stdout.on('error', (e) => process.exit(e.code === 'EPIPE' ? 0 : 1));
 
@@ -166,6 +170,15 @@ function config() {
   }
 }
 
+function feedback() {
+  const file = feedbackPath(process.env, set['feedback.file']);
+  const { entries, bad } = readFeedback(file);
+  const from = o.since ? parseSince(o.since) : -Infinity;
+  const es = entries.filter((e) => Date.parse(e.at) >= from);
+  if (o.json) return console.log(JSON.stringify(es, null, 2));
+  console.log(feedbackReport(es, { bad, file }));
+}
+
 async function view() {
   const askTerminal = configureTheme(set);
   const lensWanted = o.lens ?? (cfg.sources['viewer.lens'] === 'default' ? null : set['viewer.lens']);
@@ -192,12 +205,12 @@ async function view() {
     process.stdout.write(rows.map((r) => (o.plain ? plain(r.segs).trimEnd() : fit(r.segs, width))).join('\n') + '\n');
   } else {
     const { runViewer } = await import('../src/viewer.mjs');
-    await runViewer({ dir, layout: set['viewer.layout'], highlight: set['viewer.highlight'], lens: lensWanted, queryTheme: askTerminal, viMode: set['viewer.vi_mode'], editor: set['viewer.editor'] });
+    await runViewer({ dir, layout: set['viewer.layout'], highlight: set['viewer.highlight'], lens: lensWanted, queryTheme: askTerminal, viMode: set['viewer.vi_mode'], editor: set['viewer.editor'], feedbackFile: feedbackPath(process.env, set['feedback.file']) });
   }
 }
 
 try {
-  await { hunks, check, config, view }[cmd]();
+  await { hunks, check, config, feedback, view }[cmd]();
 } catch (e) {
   console.error(`fr: ${e.message}`);
   process.exit(1);

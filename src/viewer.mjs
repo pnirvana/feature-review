@@ -13,6 +13,7 @@ import { annotationsPath, readAnnotations, checkAnnotations } from './annotation
 import { queryColors, applyTheme } from './ui/theme.mjs';
 import { overviewRows, tabBar, TABS } from './overview.mjs';
 import { ESC, fit, plain, charWidth, strWidth, segsWidth, hasBg } from './md/term.mjs';
+import { feedbackPath, recordFeedback, aboutRow } from './feedback.mjs';
 import { textField, keyField, fieldText, fieldRows, fieldMode } from './ui/textfield.mjs';
 
 
@@ -33,6 +34,7 @@ const HELP = [
   'c               comment on the line under the cursor (on a file or hunk line: the file)',
   'e x             on a comment: edit it / delete it (x twice)',
   'o               open the line in $EDITOR',
+  '!               feedback on what is under the cursor: h helped  m missing here  w wrong, then a note (fr feedback reads it back)',
   's               side by side ↔ inline',
   'f               show or hide kinds of markers, notes and marks: 1 agent  2 fr  3 coverage  4 comments  0 all',
   'a               hide the annotations in and around the code (findings, fr\'s notes, test intents; their',
@@ -51,7 +53,7 @@ const HELP = [
  * Open the viewer. input and output are the terminal (tests pass a fake one); exit ends
  * the process on q. → {close, ui} once the change is loaded and highlighted.
  */
-export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens = null, input = process.stdin, output = process.stdout, exit = (code) => process.exit(code), queryTheme = true, viMode = false, editor = '' }) {
+export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = 'auto', highlight = 'auto', lens = null, input = process.stdin, output = process.stdout, exit = (code) => process.exit(code), queryTheme = true, viMode = false, editor = '' }) {
   const out = output;
   const ui = {
     ws: null,
@@ -78,6 +80,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     quiet: false, // annotations hidden (a): the code alone
     show: { agent: true, fr: true, coverage: true, comments: true }, // the kinds of markers shown (f)
     layers: null, // the f menu, when open: {cur, top} kept
+    fb: null, // the feedback key, when asked: {target} (what the entry is about)
   };
 
   const W = () => out.columns || 100;
@@ -222,7 +225,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     const l = r.line && typeof r.line === 'object' ? `:${r.line.side === 'old' ? '-' : '+'}${r.line.n}` : '';
     return `${x.repo.name}/${x.f.file}${l}`;
   }
-  const KEYS = 'tab lens  m overview  a annotations  f markers  j/k move  ]] file  ]u not reviewed  v reviewed  space fold  c comment  o editor  s layout  / search  ? help  q quit';
+  const KEYS = 'tab lens  m overview  a annotations  f markers  j/k move  ]] file  ]u not reviewed  v reviewed  space fold  c comment  ! feedback  o editor  s layout  / search  ? help  q quit';
   const OV_KEYS = 'h/l or 1-4 tab  j/k move  ⏎ to the code  m/esc back to the review  q quit';
   function footer() {
     const w = W();
@@ -236,6 +239,13 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
       return [
         [[' ' + ui.input.label, 'bold yellow'], ...viMode, [mode ? '   esc normal mode · ⏎ there sends' : '   ⏎ save · alt+⏎ new line · esc cancel', 'dim']],
         ...rows.map((segs, i) => [[(i === 0 && above) || (i === rows.length - 1 && below) ? ' ⋮ ' : ' │ ', 'gray'], ...segs]),
+      ];
+    }
+    if (ui.fb) {
+      const t = ui.fb.target;
+      return [
+        [[' feedback on ', 'bold yellow'], [t.about, 'bold'], ['   h helped   m missing here   w wrong', ''], ['   esc cancel', 'dim']],
+        [[' ', ''], [t.text ? `│ ${t.text.replace(/\s+/g, ' ').trim()}` : '', 'gray']],
       ];
     }
     if (ui.layers) {
@@ -803,6 +813,68 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     if (save((st) => deleteComment(st, r.comment))) relayout(), flash('comment deleted');
   }
 
+  // ---------- the feedback key (discovery §11) ----------
+  /**
+   * What an entry made at the cursor is about: the kind of thing (aboutRow), where it is,
+   * and its text as shown (the rows of the same finding, note or comment), so the entry
+   * reads without the worktrees.
+   */
+  function feedbackTarget() {
+    let i = ui.cur;
+    // on a spacer: the thing below it
+    while (ui.rows[i]?.spacer && i + 1 < ui.rows.length) i++;
+    const r = ui.rows[i];
+    if (!r) return null;
+    const same = (x) => x && !x.spacer && (r.comment ? x.comment === r.comment : r.callout && r.callout !== 'fr' ? x.callout === r.callout && x.about === r.about : false);
+    let a = i;
+    let b = i;
+    while (same(ui.rows[a - 1])) a--;
+    while (same(ui.rows[b + 1])) b++;
+    const text = ui.rows.slice(a, b + 1).map((x) => plain(x.segs).replace(/^[\s▌▎┃]+/, '').trimEnd()).filter(Boolean).join('\n').slice(0, 2000);
+    const t = { about: aboutRow(r), feature: ui.ws.root, text };
+    const x = r.fid && fileById(r.fid);
+    if (x) Object.assign(t, { repo: x.repo.name, file: x.f.file });
+    else if (r.repo) t.repo = r.repo;
+    if (r.hunk) t.hunk = r.hunk;
+    if (r.group) t.group = r.group;
+    if (r.line && typeof r.line === 'object' && x) {
+      t.line = { side: r.line.side, n: r.line.n };
+      const l = x.f.hunks.find((y) => y.key === r.hunk)?.lines.find(([, , o, n]) => (r.line.side === 'old' ? o : n) === r.line.n);
+      if (l) t.quote = l[1];
+      const cov = r.line.side === 'new' && ui.ws.signals?.coverage?.get(r.fid);
+      if (cov && !cov.stale && cov.lines.get(r.line.n)) t.coverage = cov.lines.get(r.line.n);
+    }
+    return t;
+  }
+  function startFeedback() {
+    const target = feedbackTarget();
+    if (!target) return flash('nothing here', 'yellow');
+    ui.fb = { target };
+    draw();
+  }
+  const VERDICT_KEYS = { h: 'helped', 1: 'helped', m: 'missing', 2: 'missing', w: 'wrong', 3: 'wrong' };
+  function feedbackKey(k) {
+    const verdict = VERDICT_KEYS[k];
+    if (k === '\x1b' || k === 'q' || k === '!') return void ((ui.fb = null), draw());
+    if (!verdict) return;
+    const { target } = ui.fb;
+    ui.fb = null;
+    const hint = { helped: 'what it saved you (optional)', missing: 'what should have been said here (optional)', wrong: 'what is wrong about it (optional)' }[verdict];
+    ask({
+      label: `${verdict} · ${target.about}: ${hint}: `,
+      multiline: false,
+      onSubmit: (note) => {
+        try {
+          recordFeedback(feedbackFile, { verdict, ...(note.trim() ? { note: note.trim() } : {}), ...target });
+          flash(`feedback recorded: ${verdict} · ${target.about}   (fr feedback reads it back)`);
+        } catch (e) {
+          flash(`feedback not recorded: ${e.message}`, 'red');
+        }
+      },
+      onCancel: () => flash('feedback not recorded', 'dim'),
+    });
+  }
+
   function openEditor() {
     const r = ui.rows[ui.cur];
     const x = r?.fid && fileById(r.fid);
@@ -853,6 +925,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     }
     if (ui.ov) return ovKey(k);
     if (ui.layers) return layersKey(k);
+    if (ui.fb) return feedbackKey(k);
     const half = Math.max(1, Math.floor((H() - 3) / 2));
     const p = ui.pending;
     ui.pending = '';
@@ -902,6 +975,7 @@ export async function runViewer({ dir, layout = 'auto', highlight = 'auto', lens
     else if (k === 'e') return editAt();
     else if (k === 'x') return deleteAt();
     else if (k === 'o') return openEditor();
+    else if (k === '!') return startFeedback();
     else if (k === 's') {
       // switch what is on screen; auto (the setting) only picks the start
       ui.layout = shownLayout() === 'split' ? 'unified' : 'split';

@@ -29,7 +29,7 @@ export function collectCallouts(ws, ann) {
   for (const [u, list] of ws.signals?.units ?? [])
     for (const s of list)
       if (s.at && hunkOf.has(u))
-        add(u, { key: `fr:${u}:${s.kind}:${s.at.side}${s.at.line}`, source: 'fr', layer: signalLayer(s), level: s.level === 'info' ? 'info' : 'warn', label: s.label, text: s.text, md: false, side: s.at.side, from: s.at.line, to: s.at.line });
+        add(u, { key: `fr:${u}:${s.kind}:${s.at.side}${s.at.line}`, source: 'fr', about: `fr:${s.kind}`, layer: signalLayer(s), level: s.level === 'info' ? 'info' : 'warn', label: s.label, text: s.text, md: false, side: s.at.side, from: s.at.line, to: s.at.line });
 
   if (!ann?.ann) return { byUnit, inlined };
   const res = (ref) => ann.refs?.get(ref) ?? null;
@@ -56,6 +56,7 @@ export function collectCallouts(ws, ann) {
     add(unitFor(b), {
       key: `ghost:${i}`,
       source: 'agent',
+      about: `agent:ghost${g.status ? `:${g.status}` : ''}`,
       level: g.status === 'ok' ? 'info' : 'warn',
       label: CALLER[g.status] ?? 'UNCHANGED CALLER',
       text: g.why ?? '',
@@ -73,7 +74,7 @@ export function collectCallouts(ws, ann) {
       const r = (Array.isArray(f?.refs) ? f.refs : []).map(res).find(inChange);
       if (!r) return;
       inlined.add(f);
-      add(unitFor(r), { key: `flag:${i}:${j}`, source: 'agent', level: 'warn', label: human(f.kind), text: f.note ?? '', md: true, ...span(r) });
+      add(unitFor(r), { key: `flag:${i}:${j}`, source: 'agent', about: `agent:test-flag${f?.kind ? `:${f.kind}` : ''}`, level: 'warn', label: human(f.kind), text: f.note ?? '', md: true, ...span(r) });
     }),
   );
 
@@ -81,7 +82,7 @@ export function collectCallouts(ws, ann) {
     const r = res(f?.ref);
     if (!inChange(r)) return;
     inlined.add(f);
-    add(unitFor(r), { key: `finding:${i}`, source: 'agent', level: f.severity === 'low' ? 'info' : 'warn', label: human(f.kind || 'finding'), text: f.note ?? '', md: true, ...span(r) });
+    add(unitFor(r), { key: `finding:${i}`, source: 'agent', about: `agent:finding${f?.kind ? `:${f.kind}` : ''}`, level: f.severity === 'low' ? 'info' : 'warn', label: human(f.kind || 'finding'), text: f.note ?? '', md: true, ...span(r) });
   });
   return { byUnit, inlined };
 }

@@ -13,7 +13,8 @@ Step 2, the annotation file (`docs/annotations.md`), is built: `fr hunks`, `fr c
 the groups lens, ghosts and test intents in place, the overview (`m`). Step 3, the cheap
 objective signals (`src/signals.mjs`, `src/asserts.mjs`, `src/coverage.mjs`), is
 built: verified mechanical changes, tests paired with code, assertion heuristics, JaCoCo
-coverage of the changed lines. Next is step 4, the feedback key. Findings sit in the diff under their line
+coverage of the changed lines. Step 4, the feedback key (`!`, `fr feedback`,
+`src/feedback.mjs`), is built: the first version is complete. Findings sit in the diff under their line
 (`src/inline.mjs`, discovery §12).
 
 `npm test` runs the tests; `node test/fixture.mjs <dir>` builds a sample feature.

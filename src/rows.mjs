@@ -253,7 +253,8 @@ function noteRows(ctx, { kind, x, res }, base) {
       }
     }
   }
-  return [spacer(base), ...body.map((r) => ({ ...r, callout: `note:${kind}`, segs: [['  ', ''], ['┃ ', bar], ...r.segs] }))];
+  const about = `agent:${kind}${kind === 'ghost' && x?.status ? `:${x.status}` : kind === 'finding' && x?.kind ? `:${x.kind}` : ''}`;
+  return [spacer(base), ...body.map((r) => ({ ...r, callout: `note:${kind}`, about, segs: [['  ', ''], ['┃ ', bar], ...r.segs] }))];
 }
 
 /** The notes placed under a unit, once per view (a hunk shown in two groups gets them the first time). */
@@ -318,7 +319,7 @@ function calloutRows(ctx, c, base, indent) {
   const badge = fr ? (c.level === 'info' ? 'factsoft' : 'fact') : c.level === 'info' ? 'agentsoft' : 'agent';
   const w = Math.max(20, ctx.width - indent - 2);
   const open = c.expand && ctx.fold.get(`x:${c.key}`) === false;
-  const meta = { kind: 'note', ...base, callout: c.key, ...(c.expand ? { expand: `x:${c.key}` } : {}) };
+  const meta = { kind: 'note', ...base, callout: c.key, about: c.about, ...(c.expand ? { expand: `x:${c.key}` } : {}) };
   const pre = [[' '.repeat(indent), ''], ['┃ ', bar]];
   const head = [[` ${c.label} `, badge]];
   if (c.expand) head.push([open ? '   ⏎ hide the code' : '   ⏎ show the code', 'dim']);
@@ -468,7 +469,7 @@ function signalSegs(list = [], labelWidth = 0) {
  * empty row above, and below when more follows (`after`).
  */
 const signalRows = (list = [], base = {}, { after = true } = {}) =>
-  list.length ? [spacer(base), ...list.map((s) => ({ kind: 'note', ...base, callout: 'fr', ...(s.pair ? { pair: s.pair } : {}), segs: [['  ', ''], ['┃', 'factbar'], ...signalSegs([s], Math.max(...list.map((x) => x.label.length)))] })), ...(after ? [spacer(base)] : [])] : [];
+  list.length ? [spacer(base), ...list.map((s) => ({ kind: 'note', ...base, callout: 'fr', about: `fr:${s.kind}`, ...(s.pair ? { pair: s.pair } : {}), segs: [['  ', ''], ['┃', 'factbar'], ...signalSegs([s], Math.max(...list.map((x) => x.label.length)))] })), ...(after ? [spacer(base)] : [])] : [];
 /** A file's signals under its title: done with once the file is reviewed and folded. */
 function fileSignalRows(ctx, f, { folded, units = unitsOf(f), base = {} }) {
   if (ctx.quiet || (folded && units.every(ctx.marked))) return [];

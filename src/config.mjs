@@ -16,6 +16,7 @@ export const SETTINGS = [
   { key: 'viewer.lens', values: ['groups', 'services'], default: 'groups', flag: 'lens', doc: 'the lens to open in when there are annotations (tab switches)' },
   { key: 'viewer.highlight', values: ['auto', 'bat', 'builtin', 'none'], default: 'auto', flag: 'highlight', doc: 'code highlighting: bat when installed (auto), bat, the built-in one, or none' },
   { key: 'viewer.editor', type: 'string', default: '', env: ['VISUAL', 'EDITOR'], doc: 'the command o opens a line with (+LINE FILE appended); "": $VISUAL, else $EDITOR, else vi', envFirst: false },
+  { key: 'feedback.file', type: 'string', default: '', env: ['FR_FEEDBACK'], doc: 'where the feedback key (!) appends its entries ("": $XDG_STATE_HOME/feature-review/feedback.jsonl, else ~/.local/state/…)' },
   { key: 'theme.background', type: 'background', default: 'auto', env: ['FR_BACKGROUND'], doc: 'auto (ask the terminal), light, dark or "#rrggbb": set it where the terminal does not answer' },
   { key: 'theme.bat_light', type: 'string', default: 'GitHub', env: ['BAT_THEME_LIGHT'], doc: "bat's theme on a light background ($BAT_THEME, when set, wins for both)" },
   { key: 'theme.bat_dark', type: 'string', default: '', env: ['BAT_THEME_DARK'], doc: 'bat\'s theme on a dark background ("": bat\'s default)' },

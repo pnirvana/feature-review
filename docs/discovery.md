@@ -267,7 +267,12 @@ Built in this order, each step usable on its own:
    prose that explains why stays above the code. Quoting a changed line in a note below
    the hunk made the reader match it to the diff: too much load.
    Pure identifier renames (an AST-level diff) are not verified yet.
-4. **The feedback key** (§11).
+4. **The feedback key** (§11). Built (2026-11-22): `!` records helped / missing /
+   wrong at the cursor, with a note, in one append-only log for all features
+   (`$XDG_STATE_HOME/feature-review/feedback.jsonl`, `src/feedback.mjs`); each entry
+   keeps the kind of thing it was about, its location and the text shown. `fr
+   feedback` counts them by kind and lists the notes. One log rather than one per
+   feature: the point is to read across features, and a feature's directory goes away.
 
 Later: running the changed tests against the base, mutation testing on the changed
 lines, posting comments to the per-service PRs, and talking to the agent from inside the

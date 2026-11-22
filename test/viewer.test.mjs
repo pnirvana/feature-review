@@ -9,6 +9,7 @@ import { PassThrough, Writable } from 'node:stream';
 import { makeSample, sampleAnnotations } from './fixture.mjs';
 import { runViewer } from '../src/viewer.mjs';
 import { readState } from '../src/state.mjs';
+import { readFeedback } from '../src/feedback.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -74,7 +75,7 @@ async function viewer(opts = {}) {
   fs.rmSync(path.join(dir, '.feature-review', 'state.json'), { force: true });
   const term = fakeTerminal(opts.cols, opts.rows);
   let exited = null;
-  const v = await runViewer({ dir, highlight: 'none', queryTheme: false, viMode: opts.viMode ?? false, input: term.input, output: term.output, exit: (c) => (exited = c) });
+  const v = await runViewer({ dir, layout: opts.layout ?? 'auto', feedbackFile: path.join(top, 'feedback.jsonl'), highlight: 'none', queryTheme: false, viMode: opts.viMode ?? false, input: term.input, output: term.output, exit: (c) => (exited = c) });
   open.push(v);
   return { term, v, exited: () => exited };
 }
@@ -326,4 +327,44 @@ test('the cursor’s whole line is highlighted, across the width', async () => {
   const line = term.raw()[row];
   assert.match(line, /\x1b\[48;[\d;]+m {20,}/, 'a background reaches the end of the line');
   assert.doesNotMatch(term.raw()[row + 1] ?? '', /\x1b\[48;[\d;]+m {20,}/);
+});
+
+test('! records feedback on what is under the cursor: the verdict, a note, what was shown', async () => {
+  const log = path.join(top, 'feedback.jsonl');
+  fs.rmSync(log, { force: true });
+  const { term } = await viewer({ rows: 40, cols: 130 });
+  await term.type('/', ...'CALLER TO CHECK', '\r', '\x1b');
+  await term.type('!');
+  assert.match(term.screen().join('\n'), /feedback on agent:ghost:unclear .*h helped .*m missing here .*w wrong/);
+  await term.type('w', ...'the caller is fine', '\r');
+  assert.match(term.screen().join('\n'), /feedback recorded: wrong · agent:ghost:unclear/);
+  // esc on the note: nothing recorded
+  await term.type('!', 'h', '\x1b');
+  assert.match(term.screen().join('\n'), /feedback not recorded/);
+  const { entries } = readFeedback(log);
+  assert.equal(entries.length, 1);
+  const [e] = entries;
+  assert.equal(e.verdict, 'wrong');
+  assert.equal(e.note, 'the caller is fine');
+  assert.equal(e.about, 'agent:ghost:unclear');
+  assert.equal(e.feature, dir);
+  assert.ok(e.repo && e.file && e.hunk, JSON.stringify(e));
+  assert.match(e.text, /CALLER TO CHECK/); // the whole finding as shown, not only its first row
+  assert.ok(e.text.split('\n').length > 1, e.text);
+});
+
+test('! on a changed line: the line, its text; an empty note is fine', async () => {
+  const log = path.join(top, 'feedback.jsonl');
+  fs.rmSync(log, { force: true });
+  const { term } = await viewer({ rows: 40, cols: 130, layout: 'unified' });
+  await term.type('/', ...'amount, idempotencyKey);', '\r', '\x1b', '!', 'm', '\r');
+  const { entries } = readFeedback(log);
+  assert.equal(entries.length, 1);
+  const [e] = entries;
+  assert.equal(e.verdict, 'missing');
+  assert.equal(e.note, undefined);
+  assert.equal(e.about, 'code');
+  assert.equal(e.repo, 'gateway');
+  assert.deepEqual(e.line, { side: 'new', n: 7 });
+  assert.match(e.quote, /return client\.refund\(orderId, amount, idempotencyKey\);/);
 });

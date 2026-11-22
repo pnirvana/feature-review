@@ -22,6 +22,7 @@ in effect and where each comes from.
 | `viewer.lens` | `"groups"` | the lens to open in when there are annotations |
 | `viewer.highlight` | `"auto"` | `bat` when installed, `builtin`, `none` |
 | `viewer.editor` | `""` | the command `o` opens a line with; `""`: `$VISUAL`, else `$EDITOR`, else `vi` |
+| `feedback.file` | `""` | where `!` appends its entries; `""`: `$XDG_STATE_HOME/feature-review/feedback.jsonl`, else `~/.local/state/…` (`$FR_FEEDBACK` overrides it) |
 | `theme.background` | `"auto"` | ask the terminal, or `light`, `dark`, `"#rrggbb"` where it does not answer (some multiplexers); `$FR_BACKGROUND` overrides it |
 | `theme.bat_light` | `"GitHub"` | bat's theme on a light background (`$BAT_THEME`, when set, wins for both) |
 | `theme.bat_dark` | `""` | bat's theme on a dark one (`""`: bat's default) |
@@ -120,12 +121,26 @@ explain what fr has verified.
 | `space` `z` `Z` | fold the hunk · the file or group · all of them |
 | `c` · `e` · `x` | comment on the line (on a file line: the file) · edit · delete |
 | `o` | open the line in `$EDITOR` |
+| `!` | feedback on what is under the cursor: `h` helped · `m` missing here · `w` wrong, then an optional note |
 | `s` · `r` · `/` · `?` · `q` | side by side ↔ inline · reload · search as you type (⏎ keeps the match, esc goes back) · help · quit |
 
 Reviewed hunks and files fold away. A mark is keyed by the hunk's repository, file and
 changed lines, so it survives a rebase and resets when the hunk changes. A comment
 follows its line when the code around it moves, and shows as outdated when the line is
 gone. Marks and comments are in `<dir>/.feature-review/state.json`.
+
+### Feedback: does fr earn its place?
+
+`!` records, at the cursor, that what is there **helped**, that something is **missing**
+there (a line nothing flagged but should have), or that it is **wrong** (noise, a false
+alarm, a bad explanation), with an optional note. Each entry keeps what it was about (a
+kind such as `fr:not-covered`, `agent:ghost:unclear`, `agent:finding:deleted-check`,
+`code`), where, and the text as it was shown, so it reads after the worktrees are gone.
+
+One log for every feature, on this machine only (`feedback.file`). `fr feedback
+[--since 2w] [--json]` reads it back: counts by kind, then the wrong, missing and
+helped entries with their notes. A kind marked wrong more than it helps is a candidate
+to drop or tune; the missing ones say what to detect or ask the agent for next.
 
 ## The agent's annotations
 
