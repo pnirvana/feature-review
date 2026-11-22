@@ -42,7 +42,9 @@ fr ~/work/idempotent-refunds --print | less -R
 
 - Each worktree from its **merge base with origin's default branch** (`origin/HEAD`) to
   its **working tree**: uncommitted and untracked files are part of the change and marked
-  `● uncommitted`. Override the base in `<dir>/feature-review.toml`:
+  `● uncommitted`. Without `origin/HEAD` (a remote added by hand, or none), fr guesses:
+  another remote's default branch, else `<remote>/main` or `master`, else the local
+  `main` or `master`, and says "(guessed)". Override the base in `<dir>/feature-review.toml`:
   `base = "origin/release"`, or per worktree `[base]` with `gateway = "origin/feature-x"`.
 - One heading per service (branch, base, size, uncommitted files, reviewed count), then
   its files and hunks, side by side from 110 columns, unified below.

@@ -123,7 +123,26 @@ test('a repository without a base says so instead of failing the workspace', asy
   fs.mkdirSync(lone, { recursive: true });
   execFileSync('git', ['init', '-q'], { cwd: lone });
   const ws = await loadWorkspace(path.dirname(lone));
-  assert.match(ws.repos[0].error, /no base/);
+  assert.match(ws.repos[0].error, /no base in .*svc: no remote and no main or master .*feature-review\.toml: base = /);
+});
+
+test('no origin/HEAD: another remote, then main or master, then the local main', async () => {
+  const d = path.join(top, 'guess', 'svc');
+  fs.mkdirSync(d, { recursive: true });
+  const g = (...a) => execFileSync('git', a, { cwd: d });
+  g('init', '-q', '-b', 'main');
+  g('-c', 'user.email=t@t', '-c', 'user.name=t', 'commit', '-q', '--allow-empty', '-m', 'base');
+  g('checkout', '-q', '-b', 'feature');
+  let r = (await loadWorkspace(path.dirname(d))).repos[0];
+  assert.deepEqual([r.baseRef, r.baseFrom, r.error], ['main', 'guess', undefined]);
+  // a remote added by hand, fetched: no HEAD of its own, but a main
+  const bare = path.join(top, 'guess', 'up.git');
+  execFileSync('git', ['init', '-q', '--bare', '-b', 'main', bare]);
+  g('remote', 'add', 'up', bare);
+  g('push', '-q', 'up', 'main');
+  g('fetch', '-q', 'up');
+  r = (await loadWorkspace(path.dirname(d))).repos[0];
+  assert.equal(r.baseRef, 'up/main');
 });
 
 test('comments: kept at their line, moved with it, or outdated', async () => {

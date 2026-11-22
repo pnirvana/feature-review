@@ -16,12 +16,17 @@ import { computeSignals } from './signals.mjs';
 export const STATE_DIR = '.feature-review';
 export const MANIFEST = 'feature-review.toml';
 
+// fr runs git in a worktree's directory: a repository location inherited from the shell
+// (a dotfiles alias exporting GIT_DIR, say) would send every call to that one instead
+const ELSEWHERE = ['GIT_DIR', 'GIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_COMMON_DIR', 'GIT_OBJECT_DIRECTORY', 'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_NAMESPACE', 'GIT_PREFIX'];
+const baseEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !ELSEWHERE.includes(k)));
+
 export function git(cwd, args, { env = {}, input = null } = {}) {
   return new Promise((resolve) => {
     const p = execFile(
       'git',
       ['-c', 'core.quotePath=false', ...args],
-      { cwd, env: { ...process.env, GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C', ...env }, timeout: 60_000, maxBuffer: 256 << 20 },
+      { cwd, env: { ...baseEnv(), GIT_OPTIONAL_LOCKS: '0', LC_ALL: 'C', ...env }, timeout: 60_000, maxBuffer: 256 << 20 },
       (err, stdout, stderr) => resolve(err ? { ok: false, out: String(stdout), err: String(stderr).trim() || err.message } : { ok: true, out: String(stdout) }),
     );
     if (input !== null) p.stdin.end(input);
@@ -137,8 +142,24 @@ async function baseRef(dir, name, manifest) {
   if (want) return { ref: want, from: MANIFEST };
   const head = await gitOut(dir, ['symbolic-ref', '--short', 'refs/remotes/origin/HEAD']);
   if (head) return { ref: head, from: 'origin/HEAD' };
-  for (const r of ['origin/main', 'origin/master']) if (await gitOut(dir, ['rev-parse', '--verify', '--quiet', `${r}^{commit}`])) return { ref: r, from: 'guess' };
-  return null;
+  const isCommit = async (r) => Boolean(await gitOut(dir, ['rev-parse', '--verify', '--quiet', `${r}^{commit}`]));
+  // origin first, then the other remotes: their default branch, else main or master
+  const remotes = ((await gitOut(dir, ['remote'])) ?? '').split('\n').filter(Boolean).sort((a, c) => (a === 'origin' ? -1 : c === 'origin' ? 1 : 0));
+  for (const rm of remotes) {
+    const h = await gitOut(dir, ['symbolic-ref', '--short', `refs/remotes/${rm}/HEAD`]);
+    if (h) return { ref: h, from: 'guess' };
+    for (const br of ['main', 'master']) if (await isCommit(`${rm}/${br}`)) return { ref: `${rm}/${br}`, from: 'guess' };
+  }
+  // no remote that knows one (a local repository): the local main or master
+  for (const br of ['main', 'master']) if (await isCommit(`refs/heads/${br}`)) return { ref: br, from: 'guess' };
+  return { ref: null, remotes };
+}
+
+/** What to do when no base is found: said in the error, with the exact fix. */
+function noBase(root, dir, name, remotes) {
+  const set = `set it in ${path.join(root, MANIFEST)}: base = "<branch or commit>" (every worktree), or [base] ${name} = "…"`;
+  if (!remotes.length) return `no base in ${dir}: no remote and no main or master branch to compare with; ${set}`;
+  return `no base in ${dir}: ${remotes.join(', ')} ${remotes.length === 1 ? 'has' : 'have'} no default branch known here (git remote set-head ${remotes[0]} --auto fetches it), and no main or master; or ${set}`;
 }
 
 // ---------- reading a change ----------
@@ -165,11 +186,11 @@ async function workingTreeIndex(dir) {
  * One repository's change: base, head and its files with hunks (keys set), each file
  * marked `dirty` when it differs from HEAD (not committed yet).
  */
-export async function readRepo(repo, manifest = {}) {
+export async function readRepo(repo, manifest = {}, root = path.dirname(repo.dir)) {
   const { dir, name } = repo;
   const out = { name, dir, files: [] };
   const br = await baseRef(dir, name, manifest);
-  if (!br) return { ...out, error: `no base: origin has no default branch here; set "base" in ${MANIFEST}` };
+  if (!br.ref) return { ...out, error: noBase(root, dir, name, br.remotes) };
   out.baseRef = br.ref;
   out.baseFrom = br.from;
   out.head = await gitOut(dir, ['rev-parse', 'HEAD']);
@@ -232,7 +253,7 @@ export async function fileTexts(repo, f) {
 export async function loadWorkspace(dir) {
   const ws = discover(dir);
   const manifest = readManifest(ws.root);
-  const repos = await Promise.all(ws.repos.map((r) => readRepo(r, manifest)));
+  const repos = await Promise.all(ws.repos.map((r) => readRepo(r, manifest, ws.root)));
   const out = { ...ws, manifest, repos };
   out.signals = await computeSignals(out);
   return out;
