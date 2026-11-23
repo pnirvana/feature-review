@@ -8,7 +8,7 @@ import { STATE_DIR } from './workspace.mjs';
 
 export const statePath = (root) => path.join(root, STATE_DIR, 'state.json');
 
-const empty = () => ({ version: 1, marks: {}, comments: [] });
+const empty = () => ({ version: 1, marks: {}, comments: [], questions: [] });
 
 export function readState(root) {
   try {
@@ -60,6 +60,23 @@ export function editComment(st, id, text) {
 
 export function deleteComment(st, id) {
   st.comments = st.comments.filter((x) => x.id !== id);
+}
+
+/**
+ * A question sent to the agent (the ask key), at {repo, file, side, line, quote, hunk,
+ * group} or nowhere (the whole change): kept so it shows until the agent's answer, which
+ * carries its id (`asked`), is in the annotation file.
+ */
+export function addQuestion(st, id, at, question) {
+  const q = { id, ...at, question, at: new Date().toISOString() };
+  (st.questions ??= []).push(q);
+  return q;
+}
+
+/** The questions with no answer in the annotations yet (ann: the annotation file's object). */
+export function pendingQuestions(st, ann) {
+  const answered = new Set((Array.isArray(ann?.explanations) ? ann.explanations : []).map((e) => e?.asked).filter(Boolean));
+  return (st?.questions ?? []).filter((q) => !answered.has(q.id));
 }
 
 const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();

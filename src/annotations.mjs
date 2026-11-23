@@ -173,9 +173,9 @@ export async function checkAnnotations(ann, ws) {
 
   if (!ann || typeof ann !== 'object' || Array.isArray(ann)) return { errors: [{ at: '', msg: 'the file must hold a JSON object' }], warnings, groups: [], ungrouped: ids.map((u) => u.id), multi: [], refs, ids };
   if (ann.version !== 1) err('version', 'must be 1');
-  const known = ['version', 'intent', 'overview', 'written', 'groups', 'findings', 'design', 'names', 'tests', 'ghosts', 'contracts', 'rollout'];
+  const known = ['version', 'intent', 'overview', 'written', 'groups', 'findings', 'design', 'names', 'tests', 'ghosts', 'contracts', 'rollout', 'explanations'];
   for (const k of Object.keys(ann)) if (!known.includes(k)) warn(k, 'unknown field, ignored');
-  for (const k of ['groups', 'findings', 'design', 'names', 'tests', 'ghosts', 'contracts']) if (ann[k] !== undefined && !Array.isArray(ann[k])) err(k, 'must be a list');
+  for (const k of ['groups', 'findings', 'design', 'names', 'tests', 'ghosts', 'contracts', 'explanations']) if (ann[k] !== undefined && !Array.isArray(ann[k])) err(k, 'must be a list');
 
   // every citation anywhere, resolved
   const walk = async (x, at) => {
@@ -270,6 +270,13 @@ export async function checkAnnotations(ann, ws) {
       if (!Array.isArray(f.also)) err(`${at}.also`, 'must be a list of citations');
       else f.also.forEach((x, j) => needRef(x, `${at}.also[${j}]`));
     }
+  });
+  // the reviewer's questions, answered while reviewing (the ask key): at a line, or general
+  each('explanations', (e, at) => {
+    if (!str(e.question)) err(`${at}.question`, 'missing: the question as the reviewer asked it');
+    if (!str(e.answer)) err(`${at}.answer`, 'missing');
+    if (e.ref !== undefined && e.ref !== null) needRef(e.ref, `${at}.ref`);
+    if (e.asked !== undefined && !str(e.asked)) err(`${at}.asked`, 'the id of the question fr sent (as in the prompt), or left out');
   });
   each('ghosts', (g, at) => {
     needRef(g.ref, `${at}.ref`);

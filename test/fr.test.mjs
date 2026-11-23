@@ -363,6 +363,35 @@ test('the intent shows on top in both lenses', async () => {
 
 // ---------- ghosts and test notes in place ----------
 
+test('an answer goes where its question was asked, across the whole width, whatever range it cites', async () => {
+  const ws = await loadWorkspace(dir);
+  const ann = sampleAnnotations();
+  const RS = 'src/main/java/shop/refund/RefundService.java';
+  // asked on new line 4; the answer cites 4-8 (its end would put it under line 8)
+  ann.explanations.push({ asked: 'q-1', question: 'show the call graph', ref: { repo: 'refund-service', file: RS, lines: '4-8' }, answer: 'refund → ledger.book' });
+  const checked = { ann, ...(await checkAnnotations(ann, ws)) };
+  const line = fileOf(ws, 'refund-service', 'RefundService.java').hunks[0].lines.find(([, , , n]) => n === 4);
+  const st = { marks: {}, comments: [], questions: [{ id: 'q-1', repo: 'refund-service', file: RS, side: 'new', line: 4, quote: line[1], question: 'show the call graph' }] };
+  for (const layout of ['split', 'unified']) {
+    const rows = buildRows(ws, st, { width: 140, tint: false, lens: 'services', layout, ann: checked });
+    const at = rows.findIndex((r) => /show the call graph/.test(plain(r.segs)));
+    const code = rows.slice(0, at).findLast((r) => r.kind === 'code');
+    assert.equal(code.at.new, 4, `${layout}: under the line it was asked at`);
+    assert.ok(plain(rows[at].segs).indexOf('┃') < 12, `${layout}: from the left, not in the right half`);
+  }
+});
+
+test('explanations: a question and an answer each; a citation when about a line, checked like any other', async () => {
+  const ws = await loadWorkspace(dir);
+  const ann = sampleAnnotations();
+  assert.deepEqual((await checkAnnotations(ann, ws)).errors, []);
+  ann.explanations = [{ question: 'q' }, { answer: 'a', ref: { repo: 'gateway', file: 'Nope.java', lines: '1' } }, 'x'];
+  const at = (await checkAnnotations(ann, ws)).errors.map((e) => e.at);
+  for (const x of ['explanations[0].answer', 'explanations[1].question', 'explanations[1].ref', 'explanations[2].question']) assert.ok(at.includes(x), `${x}: ${at}`);
+  ann.explanations = 'no';
+  assert.ok((await checkAnnotations(ann, ws)).errors.some((e) => e.at === 'explanations' && /list/.test(e.msg)));
+});
+
 test('an overview with a drawn figure; a finding also at other lines; a contract of unknown kind', async () => {
   const ws = await loadWorkspace(dir);
   const ann = sampleAnnotations();
@@ -429,8 +458,13 @@ test('findings sit under their line in the diff; the test intent before its code
     const marked = rows.filter((r) => r.kind === 'code' && [7, 8, 9].includes(r.at?.old) && /▌/.test(plain(r.segs).slice(0, 4)));
     assert.equal(marked.length, 3, `${lens}: lines 7-9 marked (a range)`);
     // the agent's markers hidden (f): the marks go with the notes
-    const noAgent = buildRows(ws, { marks: {}, comments: [] }, { width: 110, tint: false, lens, ann: checked, show: { agent: false } });
+    // (the answers to the reviewer's questions are a kind of their own: f 5)
+    const noAgent = buildRows(ws, { marks: {}, comments: [] }, { width: 110, tint: false, lens, ann: checked, show: { agent: false, questions: false } });
     assert.ok(!noAgent.some((r) => r.kind === 'code' && [7, 8, 9].includes(r.at?.old) && /▌/.test(plain(r.segs).slice(0, 4))), `${lens}: no marks`);
+    const answersOnly = text(buildRows(ws, { marks: {}, comments: [] }, { width: 110, tint: false, lens, ann: checked, show: { agent: false } }));
+    assert.match(answersOnly, /EXPLAINED[^]*Why does this check matter/, `${lens}: the answer, under its line`);
+    assert.doesNotMatch(answersOnly, /DELETED CHECK/);
+    assert.doesNotMatch(text(buildRows(ws, { marks: {}, comments: [] }, { width: 110, tint: false, lens, ann: checked, show: { questions: false } })), /EXPLAINED/);
     assert.doesNotMatch(text(rows), /Other notes/);
   }
   // folded: the count on the title

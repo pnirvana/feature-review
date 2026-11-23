@@ -223,6 +223,17 @@ export function sampleAnnotations() {
       partial: [{ deployed: ['gateway'], not: ['refund-service'], effect: 'refunds fail: the service does not take a key', risk: 'high' }],
       config: [{ ref: { repo: 'refund-service', file: 'helm/values.yaml', lines: '1' }, note: 'replicaCount 2 → 3: the in-memory key set is **per replica**' }],
     },
+    explanations: [
+      {
+        question: 'Why does this check matter if the service validates too?',
+        ref: { repo: 'gateway', file: RC, lines: '7-9', side: 'old' },
+        answer: 'It does not validate: `RefundService.refund` books whatever amount it gets. The gateway check was the only one.',
+      },
+      {
+        question: 'How does a refund travel now?',
+        answer: '```diagram\ngateway ──refund(key)──► refund-service ──book──► ledger\n```\n\nThe key is new on both sides.',
+      },
+    ],
   };
 }
 

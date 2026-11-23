@@ -205,7 +205,7 @@ async function view() {
     process.stdout.write(rows.map((r) => (o.plain ? plain(r.segs).trimEnd() : fit(r.segs, width))).join('\n') + '\n');
   } else {
     const { runViewer } = await import('../src/viewer.mjs');
-    await runViewer({ dir, layout: set['viewer.layout'], highlight: set['viewer.highlight'], lens: lensWanted, queryTheme: askTerminal, viMode: set['viewer.vi_mode'], editor: set['viewer.editor'], feedbackFile: feedbackPath(process.env, set['feedback.file']) });
+    await runViewer({ dir, layout: set['viewer.layout'], highlight: set['viewer.highlight'], lens: lensWanted, queryTheme: askTerminal, viMode: set['viewer.vi_mode'], editor: set['viewer.editor'], feedbackFile: feedbackPath(process.env, set['feedback.file']), agentKind: set['agent.kind'], agentDefinition: set['agent.definition'], agentModel: set['agent.model'], agentArgs: set['agent.args'].split(/\s+/).filter(Boolean) });
   }
 }
 

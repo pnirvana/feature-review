@@ -59,7 +59,7 @@ test('settings: wrong values and unknown keys are errors that say where', () => 
 
 test('fr config init: every setting, commented out; uncommented, it is valid', () => {
   const t = template();
-  assert.deepEqual(parseToml(t), { viewer: {}, feedback: {}, theme: {} });
+  assert.deepEqual(parseToml(t), { viewer: {}, feedback: {}, agent: {}, theme: {} });
   const dir = withFile(t.replace(/^# (\w+ = .*)$/gm, '$1'));
   const c = loadConfig({ env: {}, dir });
   assert.equal(c.values['viewer.layout'], 'auto');

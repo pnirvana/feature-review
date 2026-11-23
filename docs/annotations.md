@@ -73,7 +73,8 @@ keys when the file is checked.
   "tests": [],
   "ghosts": [],
   "contracts": [],
-  "rollout": null
+  "rollout": null,
+  "explanations": []
 }
 ```
 
@@ -225,6 +226,27 @@ by side).
  "partial": [{"deployed": ["shop"], "not": ["warehouse"], "effect": "orders are rejected: unknown field", "risk": "high"}],
  "config": [{"ref": {…}, "note": "cutoff 14:00 → 16:00, read in the server's time zone"}]}
 ```
+
+### explanations: the reviewer's questions, answered
+
+Written while the review runs, not before: the reviewer asks the agent beside fr (the
+ask key, `A`), and the agent adds the answers worth keeping. Each entry is the question,
+the answer (Markdown, figures welcome) and, when it is about a place, a citation:
+
+```json
+{"asked": "q-3f9a1c",
+ "question": "Why is the window checked here and not in the warehouse?",
+ "ref": {"repo": "shop", "file": "src/main/java/shop/order/DeliveryWindow.java", "lines": "18-24"},
+ "answer": "The warehouse accepts any window: …"}
+```
+
+`asked` is the id fr gave the question when it sent it: fr keeps the questions it sent
+in the review state and shows each, marked ASKED, until an entry with its id is here.
+A question typed into the agent's pane has no id. An answer citing changed lines is
+shown under them in the diff, the question above it, marked EXPLAINED and tinted apart
+from the prepared review; every answer is in the overview's Questions tab, the general
+ones (no `ref`) only there. `f 5` hides them; space folds one to a single line. They are kept apart from `findings`: the prepared review stays as it was
+verified, and a problem found while answering is raised with the reviewer first.
 
 ## Questions settled (2026-11-21: all four as proposed)
 

@@ -14,7 +14,8 @@ the groups lens, ghosts and test intents in place, the overview (`m`). Step 3, t
 objective signals (`src/signals.mjs`, `src/asserts.mjs`, `src/coverage.mjs`), is
 built: verified mechanical changes, tests paired with code, assertion heuristics, JaCoCo
 coverage of the changed lines. Step 4, the feedback key (`!`, `fr feedback`,
-`src/feedback.mjs`), is built: the first version is complete. Findings sit in the diff under their line
+`src/feedback.mjs`), is built: the first version is complete. Step 5, asking the agent
+while reviewing (`A`, `src/agent.mjs`, `explanations`), is built. Findings sit in the diff under their line
 (`src/inline.mjs`, discovery §12).
 
 `npm test` runs the tests; `node test/fixture.mjs <dir>` builds a sample feature.
@@ -25,7 +26,8 @@ coverage of the changed lines. Step 4, the feedback key (`!`, `fr feedback`,
   polyglot: Groovy/Spock tests, Python, Ansible, Helm, Kubernetes and more. Agents run
   with Pi on a devpod, inside herdr. This project defines the method and the annotation
   format, and ships a reference agent that prepares a review (`agent/`: a portable
-  skill plus a Pi agent definition, linked by `install.sh`). The ATF coordinator starts
+  skill plus Pi agent definitions, linked by `install.sh`: `feature-review-prep` prepares the
+  review, `feature-review-ask` answers the reviewer's questions beside fr). The ATF coordinator starts
   it once the implementing agents are done; it is not the agent that made the change.
   It is adapted on the target machine as needed.
 - **Two machines:** this one (private) is for development; the tool is used on a

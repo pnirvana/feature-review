@@ -4,7 +4,7 @@
 // FR_BACKGROUND (light | dark | #rrggbb), else COLORFGBG, else dark.
 //
 // The result is applied to STYLE (src/md/term.mjs) as named styles, so rows keep using
-// names: band, bandalt, guide, guidealt, role, riskhigh, riskmedium, risklow, fact, factsoft, factbar, agent, agentsoft, agentbar, markfr, markagent, markcomment, the diff
+// names: band, bandalt, guide, guidealt, role, riskhigh, riskmedium, risklow, fact, factsoft, factbar, agent, agentsoft, agentbar, explain, asked, explainbar, explainband, markexplain, markfr, markagent, markcomment, the diff
 // tints addbg, delbg, addword, delword, addfg, delfg, filler, and code and link for the
 // Markdown of annotations. It also picks bat's theme for a light or dark terminal.
 import { STYLE } from '../md/term.mjs';
@@ -111,6 +111,13 @@ export function makeStyles(colors) {
     agent: `1;${fg(c.bg)};${bg(c.cyan)}`,
     agentsoft: `1;${fg(c.cyan)}`,
     agentbar: fg(mix(c.bg, c.cyan, 0.75)),
+    // the answers to the reviewer's questions: a hue of their own (between fr's and the
+    // comments'), a filled label, and a tint under the whole answer, apart from the review
+    explain: `1;${fg(c.bg)};${bg(mix(c.blue, c.magenta, 0.5))}`,
+    asked: `1;${fg(mix(c.blue, c.magenta, 0.5))};${bg(mix(c.bg, mix(c.blue, c.magenta, 0.5), 0.25 * k))}`,
+    explainbar: fg(mix(c.bg, mix(c.blue, c.magenta, 0.5), 0.8)),
+    explainband: bg(mix(c.bg, mix(c.blue, c.magenta, 0.5), 0.09 * k)),
+    markexplain: fg(mix(c.blue, c.magenta, 0.5)),
     // the gutter mark of a line something is said about: fr, the agent, a comment
     markfr: fg(c.blue),
     markagent: fg(c.cyan),

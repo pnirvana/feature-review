@@ -9,6 +9,7 @@ import { PassThrough, Writable } from 'node:stream';
 import { makeSample, sampleAnnotations } from './fixture.mjs';
 import { runViewer } from '../src/viewer.mjs';
 import { readState } from '../src/state.mjs';
+import { plain } from '../src/md/term.mjs';
 import { readFeedback } from '../src/feedback.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -75,7 +76,7 @@ async function viewer(opts = {}) {
   fs.rmSync(path.join(dir, '.feature-review', 'state.json'), { force: true });
   const term = fakeTerminal(opts.cols, opts.rows);
   let exited = null;
-  const v = await runViewer({ dir, layout: opts.layout ?? 'auto', feedbackFile: path.join(top, 'feedback.jsonl'), highlight: 'none', queryTheme: false, viMode: opts.viMode ?? false, input: term.input, output: term.output, exit: (c) => (exited = c) });
+  const v = await runViewer({ dir, layout: opts.layout ?? 'auto', feedbackFile: path.join(top, 'feedback.jsonl'), highlight: 'none', queryTheme: false, viMode: opts.viMode ?? false, env: opts.env ?? {}, askAgent: opts.askAgent, input: term.input, output: term.output, exit: (c) => (exited = c) });
   open.push(v);
   return { term, v, exited: () => exited };
 }
@@ -367,4 +368,175 @@ test('! on a changed line: the line, its text; an empty note is fine', async () 
   assert.equal(e.repo, 'gateway');
   assert.deepEqual(e.line, { side: 'new', n: 7 });
   assert.match(e.quote, /return client\.refund\(orderId, amount, idempotencyKey\);/);
+});
+
+test('A asks the agent about the line under the cursor, in the multi-line field; in the overview, about the whole change', async () => {
+  // outside herdr: it says what it needs
+  const plainTerm = await viewer({ rows: 40, cols: 130 });
+  await plainTerm.term.type('A');
+  assert.match(plainTerm.term.screen().join('\n'), /A needs herdr/);
+
+  const asked = [];
+  const askAgent = async (q) => (asked.push(q), { name: 'fr-feature', pane: 'w:p2', started: asked.length === 1 });
+  const { term } = await viewer({ rows: 40, cols: 130, layout: 'unified', env: { HERDR_PANE_ID: 'w:p1' }, askAgent });
+  await term.type('/', ...'amount, idempotencyKey);', '\r', '\x1b', 'A');
+  assert.match(term.screen().join('\n'), /ask the agent about gateway\/.*RefundController\.java:\+\d+: .*⏎ send · alt\+⏎ new line/);
+  await term.type(...'why the key', '\x1b\r', ...'here?', '\r');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].question, 'why the key\nhere?');
+  assert.match(asked[0].id, /^q-[0-9a-f]{6}$/);
+  assert.equal(asked[0].root, dir);
+  assert.equal(asked[0].target.repo, 'gateway');
+  assert.equal(asked[0].target.line.side, 'new');
+  assert.match(asked[0].target.quote, /amount, idempotencyKey\);/);
+  assert.match(term.screen().join('\n'), /started fr-feature beside fr and asked it/);
+  // in the overview: no line
+  await term.type('m', 'A', ...'what is risky?', '\r');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(asked.length, 2);
+  assert.equal(asked[1].target, null);
+  assert.match(term.screen().join('\n'), /asked fr-feature: the answer comes in its pane/);
+  // esc: nothing asked
+  await term.type('A', 'x', '\x1b');
+  assert.equal(asked.length, 2);
+});
+
+test('the cursor is written for the agent ("this line"), a moment after it stops', async () => {
+  const file = path.join(dir, '.feature-review', 'cursor.json');
+  fs.rmSync(file, { force: true });
+  const { term } = await viewer({ rows: 40, cols: 130, layout: 'unified' });
+  await term.type('/', ...'amount, idempotencyKey);', '\r', '\x1b');
+  await new Promise((r) => setTimeout(r, 600));
+  const c = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(c.repo, 'gateway');
+  assert.match(c.quote, /amount, idempotencyKey\);/);
+  assert.ok(c.at);
+});
+
+test('the answers: under their line, in the Questions tab, hidden with f 5', async () => {
+  const { term } = await viewer({ rows: 60, cols: 130 });
+  await term.type('/', ...'EXPLAINED', '\r', '\x1b');
+  assert.match(term.screen().join('\n'), /Why does this check matter/);
+  await term.type('f', '5', 'f');
+  assert.doesNotMatch(term.screen().join('\n'), /EXPLAINED/);
+  await term.type('f', '0', 'f', 'm', '5');
+  const s = term.screen().join('\n');
+  assert.match(s, /5 Questions 2/);
+  assert.match(s, /EXPLAINED +Why does this check matter/);
+  assert.match(s, /about the whole change/);
+  assert.match(s, /gateway ──refund\(key\)──► refund-service/);
+});
+
+test('space folds the note under the cursor to one line that says so; the header counts them', async () => {
+  const { term } = await viewer({ rows: 60, cols: 130 });
+  await term.type('/', ...'Why does this check matter', '\r', '\x1b');
+  const before = term.screen().join('\n');
+  assert.match(before, /you asked/);
+  await term.type(' ');
+  let s = term.screen().join('\n');
+  assert.match(s, /EXPLAINED +Why does this check matter.*▸ folded · space shows it/);
+  assert.doesNotMatch(s, /you asked/);
+  assert.match(term.screen()[0], /1 note folded/);
+  // a finding folds the same way
+  await term.type('/', ...'DELETED CHECK', '\r', '\x1b', ' ');
+  assert.match(term.screen().join('\n'), /DELETED CHECK +The amount <= 0 check is gone.*▸ folded/);
+  assert.match(term.screen()[0], /2 notes folded/);
+  // open again
+  await term.type(' ');
+  assert.match(term.screen()[0], /1 note folded/);
+  await term.type('/', ...'Why does this check matter', '\r', '\x1b', ' ');
+  assert.doesNotMatch(term.screen()[0], /folded/);
+  assert.match(term.screen().join('\n'), /you asked/);
+});
+
+test('a question asked waits at its line until the answer with its id is in the file; shown alone where notes are hidden', async () => {
+  const file = path.join(dir, '.feature-review', 'annotations.json');
+  const saved = fs.readFileSync(file, 'utf8');
+  try {
+    let id = null;
+    const askAgent = async (q) => ((id = q.id), { name: 'fr-feature', pane: 'w:p2', started: false });
+    const { term } = await viewer({ rows: 60, cols: 130, layout: 'unified', env: { HERDR_PANE_ID: 'w:p1' }, askAgent });
+    // the block's notes hidden first (h): the finding and an earlier answer are in it
+    await term.type('/', ...'amount, idempotencyKey);', '\r', '\x1b', 'h');
+    const hiddenBefore = term.screen().join('\n');
+    assert.match(hiddenBefore, /notes? hidden · h shows them/);
+    assert.doesNotMatch(hiddenBefore, /Why does this check matter|DELETED CHECK/);
+    await term.type('A', ...'is the key ever empty?', '\r');
+    await new Promise((r) => setTimeout(r, 30));
+    assert.equal(readState(dir).questions[0].id, id);
+    assert.equal(readState(dir).questions[0].repo, 'gateway');
+    assert.match(term.screen()[0], /1 question waiting/);
+    // at once, waiting, though the block's notes are hidden; the others stay hidden
+    let s = term.screen().join('\n');
+    assert.match(s, /ASKED +waiting for the agent's answer[^]*is the key ever empty\?/);
+    assert.doesNotMatch(s, /Why does this check matter|DELETED CHECK/);
+    assert.match(s, /notes? hidden · h shows them/);
+    const row = term.cursor();
+    // the agent writes its answer, with the id
+    const ann = JSON.parse(saved);
+    ann.explanations.push({ asked: id, question: 'is the key ever empty?', ref: { hunk: 'gateway:H2' }, answer: 'Yes: old clients send none.' });
+    fs.writeFileSync(file, JSON.stringify(ann));
+    await new Promise((r) => setTimeout(r, 1600));
+    s = term.screen().join('\n');
+    assert.match(s, /the agent answered: is the key ever empty\?/);
+    assert.match(s, /EXPLAINED[^]*is the key ever empty\?[^]*Yes: old clients send none/);
+    assert.doesNotMatch(s, /Why does this check matter|DELETED CHECK/, 'the answer alone, not the notes hidden around it');
+    assert.match(s, /notes? hidden · h shows them/);
+    const code = (c) => ({ row: c.row, text: c.text.replace(/^[▌▎ ]+/, '') }); // (its gutter mark may change)
+    assert.deepEqual(code(term.cursor()), code(row), "the reader's line stays where it was");
+    assert.doesNotMatch(term.screen()[0], /waiting/);
+    assert.doesNotMatch(s, /ASKED/);
+    // h decides for the whole block again: all shown, then all hidden, the answer too
+    await term.type('h');
+    assert.match(term.screen().join('\n'), /DELETED CHECK/);
+    await term.type('h');
+    assert.doesNotMatch(term.screen().join('\n'), /Yes: old clients send none|DELETED CHECK/);
+  } finally {
+    fs.writeFileSync(file, saved);
+  }
+});
+
+test('h hides every note in the diff block under the cursor, says so on its title, and shows them again', async () => {
+  const { term, v } = await viewer({ rows: 80, cols: 130, layout: 'unified' });
+  await term.type('/', ...'DELETED CHECK', '\r', '\x1b');
+  const hunk = v.ui.rows[v.ui.cur].hunk;
+  const notesOf = () => v.ui.rows.filter((r) => r.hunk === hunk && r.kind === 'note').length;
+  assert.ok(notesOf() > 0);
+  const marks = () => v.ui.rows.filter((r) => r.hunk === hunk && r.kind === 'code' && /▌/.test(plain(r.segs).slice(0, 2))).length;
+  const marked = marks();
+  await term.type('h');
+  assert.equal(notesOf(), 0, 'no note left in the block');
+  assert.equal(marks(), marked, 'the gutter marks stay');
+  assert.equal(v.ui.rows[v.ui.cur].hunk, hunk, 'the cursor stays in the block');
+  assert.match(term.screen().join('\n'), /@@ .*\d+ notes? hidden · h shows them/);
+  // other blocks keep theirs
+  assert.ok(v.ui.rows.some((r) => r.hunk !== hunk && r.kind === 'note'));
+  await term.type('h');
+  assert.ok(notesOf() > 0);
+  assert.doesNotMatch(term.screen().join('\n'), /hidden · h shows them/);
+});
+
+test('h and space on a note leave what you look at where it is on the screen', async () => {
+  const { term } = await viewer({ rows: 40, cols: 130, layout: 'unified' });
+  // on a code line in the middle of the screen
+  await term.type('/', ...'amount, idempotencyKey);', '\r', '\x1b', 'j', 'j', 'j', 'j', 'j', 'j', 'k', 'k', 'k', 'k', 'k', 'k');
+  const before = term.cursor();
+  await term.type('h');
+  assert.deepEqual(term.cursor(), before, 'hidden: the line stays on its screen row');
+  await term.type('h');
+  assert.deepEqual(term.cursor(), before, 'shown again: the same');
+  // on a note far below its line: the line takes the note's place on the screen
+  await term.type('/', ...'Consequence', '\r', '\x1b');
+  const row = term.cursor().row;
+  await term.type('h');
+  assert.equal(term.cursor().row, row, 'the cursor stays on its screen row');
+  assert.ok(/^\S?▌?\s*\d/.test(term.cursor().text.trimStart()) || /\d+ [+-]? /.test(term.cursor().text), `on the code line now: ${term.cursor().text}`);
+  await term.type('h');
+  // space on a note: its first row stays put, folded to that one row
+  await term.type('/', ...'Why does this check matter', '\r', '\x1b');
+  const first = term.cursor().row - 2; // the label, above "you asked" and the question
+  assert.match(term.screen()[first], /EXPLAINED/);
+  await term.type(' ');
+  assert.match(term.screen()[first], /EXPLAINED.*▸ folded/);
 });

@@ -5,16 +5,18 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadWorkspace } from './workspace.mjs';
-import { readState, update, setMarks, addComment, editComment, deleteComment } from './state.mjs';
+import { readState, update, setMarks, addComment, editComment, deleteComment, addQuestion, pendingQuestions } from './state.mjs';
+import crypto from 'node:crypto';
 import { buildRows, highlightFiles, fid, unitsOf, readingOrder, groupFoldId, UNGROUPED, LAYERS } from './rows.mjs';
 
-const LAYER_NAMES = { agent: 'agent', fr: 'fr', coverage: 'coverage', comments: 'comments' };
+const LAYER_NAMES = { agent: 'agent', fr: 'fr', coverage: 'coverage', comments: 'comments', questions: 'questions' };
 import { annotationsPath, readAnnotations, checkAnnotations } from './annotations.mjs';
 import { queryColors, applyTheme } from './ui/theme.mjs';
 import { overviewRows, tabBar, TABS } from './overview.mjs';
 import { ESC, fit, plain, charWidth, strWidth, segsWidth, hasBg } from './md/term.mjs';
 import { feedbackPath, recordFeedback, aboutRow } from './feedback.mjs';
 import { textField, keyField, fieldText, fieldRows, fieldMode } from './ui/textfield.mjs';
+import { askAgent as askHerdrAgent, inHerdr, writeCursor } from './agent.mjs';
 
 
 const HELP = [
@@ -22,7 +24,7 @@ const HELP = [
   '',
   'j k ↑↓          move                    ctrl-d/u half a page   ctrl-f/b a page   gg G top / end',
   'tab             lens: the agent\'s groups (reading order, riskiest first) or the services',
-  'm               the overview: design, names, contracts, rollout (h l or 1-4: tab, ⏎: to the code, m: back)',
+  'm               the overview: design, names, contracts, rollout (h l or 1-5: tab, ⏎: to the code, m: back)',
   ']] [[           next / previous file    ]g [g  group (services lens: service)',
   ']h [h           next / previous hunk    ]u [u  next / previous hunk not reviewed yet',
   ']c [c           next / previous comment',
@@ -34,9 +36,13 @@ const HELP = [
   'c               comment on the line under the cursor (on a file or hunk line: the file)',
   'e x             on a comment: edit it / delete it (x twice)',
   'o               open the line in $EDITOR',
+  'A               ask the agent beside fr about the line under the cursor (in the overview: the whole change);',
+  '                it answers in its pane and in the review: under the line, marked EXPLAINED (ASKED until then)',
+  'space           on a note (a finding, an answer): fold it to one line, or open it; the header counts them',
   '!               feedback on what is under the cursor: h helped  m missing here  w wrong, then a note (fr feedback reads it back)',
   's               side by side ↔ inline',
-  'f               show or hide kinds of markers, notes and marks: 1 agent  2 fr  3 coverage  4 comments  0 all',
+  'f               show or hide kinds of markers, notes and marks: 1 agent  2 fr  3 coverage  4 comments  5 questions  0 all',
+  'h               hide every note in the diff block under the cursor (its title counts them); again: show',
   'a               hide the annotations in and around the code (findings, fr\'s notes, test intents; their',
   '                gutter marks stay); the intent and the groups\' reasons stay. Again: show them',
   'r               reload (the worktrees and the review state; annotations reload by themselves)',
@@ -53,7 +59,7 @@ const HELP = [
  * Open the viewer. input and output are the terminal (tests pass a fake one); exit ends
  * the process on q. → {close, ui} once the change is loaded and highlighted.
  */
-export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = 'auto', highlight = 'auto', lens = null, input = process.stdin, output = process.stdout, exit = (code) => process.exit(code), queryTheme = true, viMode = false, editor = '' }) {
+export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askHerdrAgent, agentKind = 'pi', agentDefinition = 'feature-review-ask', agentModel = '', agentArgs = [], env = process.env, dir, layout = 'auto', highlight = 'auto', lens = null, input = process.stdin, output = process.stdout, exit = (code) => process.exit(code), queryTheme = true, viMode = false, editor = '' }) {
   const out = output;
   const ui = {
     ws: null,
@@ -78,9 +84,10 @@ export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = '
     highlighting: false,
     ov: null, // the overview when open: {tab, rows, cur, top, expanded}
     quiet: false, // annotations hidden (a): the code alone
-    show: { agent: true, fr: true, coverage: true, comments: true }, // the kinds of markers shown (f)
+    show: { agent: true, fr: true, coverage: true, comments: true, questions: true }, // the kinds of markers shown (f)
     layers: null, // the f menu, when open: {cur, top} kept
     fb: null, // the feedback key, when asked: {target} (what the entry is about)
+    reveal: new Set(), // questions (ids) shown with their answers whatever is hidden: until h or a there
   };
 
   const W = () => out.columns || 100;
@@ -92,10 +99,13 @@ export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = '
 
   // ---------- data ----------
   const rowKey = (r) => (r ? [r.kind, r.group ?? '', r.fid ?? r.repo ?? '', r.hunk ?? '', JSON.stringify(r.line ?? null), r.comment ?? '', r.callout ?? ''].join('|') : null);
+  const waiting = () => (ui.st ? pendingQuestions(ui.st, ui.ann?.ann) : []);
+  // the notes folded (space) that are still in the review
+  const foldedNotes = () => ui.rows.filter((r, i) => r.folded && r.callout && ui.rows[i - 1]?.callout !== r.callout).length;
   const lensNow = () => (ui.ann?.groups.length ? (ui.lens ?? 'groups') : 'services');
   /** The layout on screen: auto is split when the code is 110 columns wide (codeView), else unified. */
   const shownLayout = () => (ui.layout !== 'auto' ? ui.layout : opts().width - (lensNow() === 'groups' ? 2 : 0) >= 110 ? 'split' : 'unified');
-  const opts = () => ({ width: Math.max(30, W() - 2), layout: ui.layout, fold: ui.fold, hl: ui.hl, lens: lensNow(), ann: ui.ann, quiet: ui.quiet, show: ui.show });
+  const opts = () => ({ width: Math.max(30, W() - 2), layout: ui.layout, fold: ui.fold, hl: ui.hl, lens: lensNow(), ann: ui.ann, quiet: ui.quiet, show: ui.show, reveal: ui.reveal });
   function relayout(keep = rowKey(ui.rows[ui.cur])) {
     if (!ui.ws) return;
     ui.rows = buildRows(ui.ws, ui.st, opts());
@@ -136,9 +146,20 @@ export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = '
     fs.watchFile(annotationsPath(root), { interval: 1000 }, async (now, before) => {
       // also called when nothing changed for a file that is not there (e.g. its directory appeared)
       if (!ui.ws || now.mtimeMs === before.mtimeMs) return;
+      const was = waiting();
       await loadAnnotations(ui.ws);
-      relayout();
+      // a question answered: its block shows its notes again (h), and opens if folded, so
+      // the answer is there to read; what the reader looks at stays where it is
+      const now2 = new Set(waiting().map((q) => q.id));
+      const answered = ui.ann ? was.filter((q) => !now2.has(q.id)) : [];
+      keepInPlace(ui.cur, () => {
+        for (const q of answered) {
+          ui.reveal.add(q.id); // the answer alone, not the notes hidden around it
+          if (q.hunk) ui.fold.set(q.hunk, false); // in a folded block: open it
+        }
+      });
       if (ui.ov) ui.ann ? ovLayout() : (ui.ov = null);
+      if (answered.length && !ui.annError) return flash(`the agent answered: ${answered[0].question.split('\n')[0].slice(0, 60)}${answered.length > 1 ? ` (+${answered.length - 1})` : ''}   ${answered[0].line != null ? 'under its line' : 'm, Questions'}`, 'markexplain');
       flash(ui.annError ? `annotations: ${ui.annError}` : ui.ann ? 'annotations reloaded' : 'annotations removed', ui.annError ? 'red' : 'green');
     });
   }
@@ -212,6 +233,8 @@ export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = '
       [` reviewed ${done}/${all.length}`, all.length && done === all.length ? 'green bold' : ''],
       ...(ui.st.comments.length ? [[`  ${ui.st.comments.length} comment${ui.st.comments.length === 1 ? '' : 's'}`, 'magenta']] : []),
       ...(ui.quiet ? [['  annotations hidden', 'yellow']] : []),
+      ...(waiting().length ? [[`  ${waiting().length} question${waiting().length === 1 ? '' : 's'} waiting`, 'markexplain']] : []),
+      ...(foldedNotes() ? [[`  ${foldedNotes()} note${foldedNotes() === 1 ? '' : 's'} folded`, 'yellow']] : []),
       ...(LAYERS.some((k) => !ui.show[k]) ? [[`  only ${LAYERS.filter((k) => ui.show[k]).map((k) => LAYER_NAMES[k]).join(', ') || 'the code'}`, 'yellow']] : []),
       [`  ${lensNow()} · ${shownLayout() === 'split' ? 'side by side' : 'inline'}${ui.layout === 'auto' ? ' (auto)' : ''}`, 'dim'],
       ...(ui.annError ? [['  annotations unreadable', 'red']] : ui.ann?.errors.length ? [[`  annotations: ${ui.ann.errors.length} error${ui.ann.errors.length === 1 ? '' : 's'}`, 'red']] : []),
@@ -225,8 +248,8 @@ export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = '
     const l = r.line && typeof r.line === 'object' ? `:${r.line.side === 'old' ? '-' : '+'}${r.line.n}` : '';
     return `${x.repo.name}/${x.f.file}${l}`;
   }
-  const KEYS = 'tab lens  m overview  a annotations  f markers  j/k move  ]] file  ]u not reviewed  v reviewed  space fold  c comment  ! feedback  o editor  s layout  / search  ? help  q quit';
-  const OV_KEYS = 'h/l or 1-4 tab  j/k move  ⏎ to the code  m/esc back to the review  q quit';
+  const KEYS = 'tab lens  m overview  a annotations  f markers  j/k move  ]] file  ]u not reviewed  v reviewed  space fold  c comment  h hide notes  A ask  ! feedback  o editor  s layout  / search  ? help  q quit';
+  const OV_KEYS = 'h/l or 1-5 tab  j/k move  ⏎ to the code  A ask  m/esc back to the review  q quit';
   function footer() {
     const w = W();
     if (ui.input) {
@@ -237,7 +260,7 @@ export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = '
       const max = Math.max(1, Math.min(8, H() - 10));
       const { rows, above, below } = fieldRows(f, Math.max(10, w - 3), max, charWidth);
       return [
-        [[' ' + ui.input.label, 'bold yellow'], ...viMode, [mode ? '   esc normal mode · ⏎ there sends' : '   ⏎ save · alt+⏎ new line · esc cancel', 'dim']],
+        [[' ' + ui.input.label, 'bold yellow'], ...viMode, [mode ? '   esc normal mode · ⏎ there sends' : `   ⏎ ${ui.input.verb ?? 'save'} · alt+⏎ new line · esc cancel`, 'dim']],
         ...rows.map((segs, i) => [[(i === 0 && above) || (i === rows.length - 1 && below) ? ' ⋮ ' : ' │ ', 'gray'], ...segs]),
       ];
     }
@@ -421,7 +444,7 @@ export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = '
   // ---------- the overview ----------
   function ovLayout() {
     const o = ui.ov;
-    o.rows = overviewRows(ui.ann, o.tab, { width: Math.max(30, W() - 3), expanded: o.expanded });
+    o.rows = overviewRows(ui.ann, o.tab, { width: Math.max(30, W() - 3), expanded: o.expanded, waiting: waiting() });
     o.cur = Math.max(0, Math.min(o.cur, o.rows.length - 1));
   }
   function openOverview() {
@@ -510,6 +533,7 @@ export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = '
     else if (k === 'h' || k === '\x1b[Z' || k === '\x1b[D') ovTab(TABS[(i + TABS.length - 1) % TABS.length].id);
     else if (/^[1-9]$/.test(k) && TABS[Number(k) - 1]) ovTab(TABS[Number(k) - 1].id);
     else if (k === '\r') return void (ovEnter(), draw());
+    else if (k === 'A') return startAsk();
     else if (k === 'm' || k === '\x1b') (ui.lastTab = ui.ov.tab), (ui.ov = null);
     else if (k === 'q') return quit();
     else if (k === '?') ui.help = true;
@@ -590,7 +614,51 @@ export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = '
     return r.fid ? find((x) => x.kind === 'file' && x.fid === r.fid) : null;
   }
   const foldId = (h) => (h.kind === 'group' ? groupFoldId(h.group) : h.kind === 'file' ? h.fid : h.hunk);
+  /**
+   * h: hide every note in the hunk under the cursor (findings, fr's notes, answers, the
+   * test's intent; the gutter marks and your comments stay), or show them again. The
+   * hunk's title says how many are hidden. Like a, the line at the top stays.
+   */
+  function toggleHunkNotes() {
+    const r = ui.rows[ui.cur];
+    if (!r?.hunk) return flash('h works in a diff block (a: every note in the review)', 'yellow');
+    const k = `q:${r.hunk}`;
+    const hide = ui.fold.get(k) !== true;
+    // h decides for the whole block again: the questions shown in it go with the rest
+    for (const q of ui.st.questions ?? []) if (q.hunk === r.hunk) ui.reveal.delete(q.id);
+    // the cursor goes to a row that stays: its code line, else the hunk's title
+    let at = ui.cur;
+    if (hide && r.kind !== 'code' && r.kind !== 'hunk' && !r.comment) {
+      const i = ui.rows.slice(0, ui.cur).findLastIndex((x) => x.hunk === r.hunk && (x.kind === 'code' || x.kind === 'hunk'));
+      if (i >= 0) at = i;
+    }
+    keepInPlace(at, () => ui.fold.set(k, hide));
+    flash(hide ? 'notes hidden in this block · h shows them' : 'notes shown', 'dim');
+  }
+
+  /**
+   * Change what is shown without moving what the reader looks at: the row at index `at`
+   * (where the cursor goes) stays on its screen row, or, when it was off the screen, takes
+   * the cursor's screen row. Only what is above or below it closes up or opens out.
+   */
+  function keepInPlace(at, change) {
+    const bodyH = Math.max(1, H() - 3);
+    const screen = at >= ui.top && at < ui.top + bodyH ? at - ui.top : ui.cur - ui.top;
+    const key = rowKey(ui.rows[at]);
+    change();
+    relayout(key);
+    ui.top = Math.max(0, ui.cur - Math.max(0, Math.min(screen, bodyH - 1)));
+    draw();
+  }
   function toggleFold(level) {
+    // on a note (a finding, an answer, fr's note): fold it to one line, or open it
+    const r = ui.rows[ui.cur];
+    if (!level && r?.kind === 'note' && r.callout) {
+      const k = `c:${r.callout}`;
+      // the note's first row stays where it is; folded, it is that one row
+      const first = ui.rows.findIndex((x) => x.kind === 'note' && !x.gap && x.callout === r.callout && x.hunk === r.hunk);
+      return keepInPlace(first >= 0 ? first : ui.cur, () => ui.fold.set(k, ui.fold.get(k) !== true));
+    }
     const h = foldHead(level);
     if (!h) return;
     ui.fold.set(foldId(h), !h.folded);
@@ -687,6 +755,7 @@ export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = '
     const from = { cur: ui.cur, top: ui.top };
     const back = ui.quietBack;
     ui.quiet = !ui.quiet;
+    ui.reveal.clear();
     relayoutKeeping();
     if (!ui.quiet && back && rowKey(old[from.cur]) === back.landed && ui.rows.length === back.n) {
       ui.cur = back.cur;
@@ -760,8 +829,8 @@ export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = '
   }
 
   /** A text field in the footer. onChange(text) on every key (a live search), onCancel on esc. */
-  function ask({ label, multiline = true, value = '', onSubmit, onChange = null, onCancel = null }) {
-    ui.input = { label, multiline, onSubmit, onChange, onCancel, field: textField(value, { multiline, vi: viMode }) };
+  function ask({ label, multiline = true, value = '', verb = null, onSubmit, onChange = null, onCancel = null }) {
+    ui.input = { label, multiline, verb, onSubmit, onChange, onCancel, field: textField(value, { multiline, vi: viMode }) };
     draw();
   }
   function comment() {
@@ -811,6 +880,60 @@ export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = '
     }
     ui.confirm = null;
     if (save((st) => deleteComment(st, r.comment))) relayout(), flash('comment deleted');
+  }
+
+  // ---------- the ask key: questions to the agent beside fr ----------
+  /**
+   * A: a question for the agent, in the multi-line field. On a line of the code (or a note
+   * on it): about that place; in the overview: about the whole change. herdr carries it to
+   * the agent's pane, starting the agent there on the first question.
+   */
+  function startAsk() {
+    if (!inHerdr(env)) return flash('A needs herdr: run fr in a herdr pane, and the agent opens beside it', 'yellow');
+    const target = ui.ov ? { tab: ui.ov.tab } : feedbackTarget();
+    const place = ui.ov ? 'the whole change' : target?.repo && target?.file ? `${target.repo}/${target.file}${target.line ? `:${target.line.side === 'old' ? '-' : '+'}${target.line.n}` : ''}` : target?.group ? `group ${target.group}` : 'the whole change';
+    ask({
+      label: `ask the agent about ${place}: `,
+      verb: 'send',
+      onSubmit: (text) => {
+        if (!text.trim()) return flash('nothing asked', 'dim');
+        flash('asking the agent…', 'dim');
+        const id = `q-${crypto.randomBytes(3).toString('hex')}`;
+        const about = ui.ov ? null : target;
+        askAgent({ root: ui.ws.root, question: text, target: about, id, env, kind: agentKind, definition: agentDefinition || null, model: agentModel || null, args: agentArgs }).then(
+          (r) => {
+            // kept in the review state: it shows, waiting, until the answer is in the file
+            const at = about ? { repo: about.repo ?? null, file: about.file ?? null, side: about.line?.side ?? null, line: about.line?.n ?? null, quote: about.quote ?? null, hunk: about.hunk ?? null, group: about.group ?? null } : {};
+            // it shows at once, waiting, even where the notes are hidden
+            ui.reveal.add(id);
+            if (save((st) => addQuestion(st, id, at, text.trim()))) {
+              if (ui.ov) relayout(), ovLayout();
+              else keepInPlace(ui.cur, () => {});
+            }
+            const runs = [r.definition, r.model ? `model ${r.model}` : r.kind === 'pi' ? "Pi's default model" : null].filter(Boolean).join(', ');
+            flash(`${r.started ? `started ${r.name}${runs ? ` (${runs})` : ''} beside fr and asked it` : `asked ${r.name}`}: the answer comes in its pane, then here`);
+          },
+          (e) => flash(`not asked: ${e.message}`, 'red'),
+        );
+      },
+      onCancel: () => flash('not asked', 'dim'),
+    });
+  }
+
+  /** Where the reviewer is, for the agent's "this line" (written a moment after the cursor stops). */
+  let cursorTimer = null;
+  let cursorLast = null;
+  function noteCursor() {
+    if (!ui.ws || ui.ov) return;
+    clearTimeout(cursorTimer);
+    cursorTimer = setTimeout(() => {
+      const t = feedbackTarget();
+      const key = JSON.stringify(t);
+      if (!t || key === cursorLast) return;
+      cursorLast = key;
+      writeCursor(ui.ws.root, t);
+    }, 400);
+    cursorTimer.unref?.();
   }
 
   // ---------- the feedback key (discovery §11) ----------
@@ -954,6 +1077,7 @@ export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = '
     else if (k === 'z') toggleFold('outer');
     else if (k === 'm') openOverview();
     else if (k === 'a') return toggleQuiet();
+    else if (k === 'h') return toggleHunkNotes();
     else if (k === 'f') return void ((ui.layers = {}), draw());
     else if (k === '\r' && ui.rows[ui.cur]?.pair) return jumpToPair(ui.rows[ui.cur].pair);
     else if (k === '\r' && ui.rows[ui.cur]?.expand) {
@@ -976,6 +1100,7 @@ export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = '
     else if (k === 'x') return deleteAt();
     else if (k === 'o') return openEditor();
     else if (k === '!') return startFeedback();
+    else if (k === 'A') return startAsk();
     else if (k === 's') {
       // switch what is on screen; auto (the setting) only picks the start
       ui.layout = shownLayout() === 'split' ? 'unified' : 'split';
@@ -986,6 +1111,7 @@ export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = '
     else if (k === '?') ui.help = true;
     else if (k === 'q') return quit();
     draw();
+    noteCursor();
   }
 
   // ---------- start ----------
@@ -1025,6 +1151,7 @@ export async function runViewer({ feedbackFile = feedbackPath(), dir, layout = '
     input.off('data', onData);
     out.off('resize', onResize);
     clearInterval(ticker);
+    clearTimeout(cursorTimer);
     if (watching) fs.unwatchFile(annotationsPath(watching));
   }
   draw();

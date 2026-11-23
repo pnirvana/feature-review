@@ -276,9 +276,45 @@ Built in this order, each step usable on its own:
    feedback` counts them by kind and lists the notes. One log rather than one per
    feature: the point is to read across features, and a feature's directory goes away.
 
+5. **Asking the agent while reviewing** (added 2026-11-23, after a first real review:
+   questions come up while reading, and the review needs a way to ask them). Built:
+   `A` opens the multi-line field; fr sends the question, with where the reviewer is, to
+   an agent in a herdr pane beside fr (`src/agent.mjs`, `herdr agent prompt`), starting
+   it on the first question. The answer comes in the agent's pane; answers worth keeping
+   go into a new section, `explanations`, shown under their line (EXPLAINED) and in the
+   overview's Questions tab, hidden with `f` `5`. Decided:
+   - **The chat stays in the agent's pane**, not in fr: the agent already has a chat
+     interface, and fr stays without a model and without dependencies. Any agent herdr
+     knows works (`agent.kind`).
+   - **Never another agent.** The agent is identified by the pane fr started it in
+     (`.feature-review/agent.json`), not by name; its name is `fr-<feature>`, numbered
+     when taken, so it clashes with no agent named after the feature.
+   - **The place travels with the question**, and fr keeps the cursor in
+     `.feature-review/cursor.json`, so "this line" typed into the agent's pane works too.
+   - **Answers apart from findings**: the prepared review stays as it was verified; a
+     problem found while answering is raised with the reviewer, who decides.
+   - **No answer goes missing** (from the first test: the agent answered a question about
+     a line only in its pane). fr keeps each question it sends, with an id, in the review
+     state and shows it at its line (ASKED) until an answer with that id is in the file;
+     the agent answers every question from fr in the file too. The answer shows the
+     question above it, in a hue and tint of its own, apart from the prepared review.
+     It is shown where the question was asked, across the whole width, not under the
+     end of the range it cites (a call graph citing a whole method landed a dozen lines
+     below, in the right half of the split view, and looked lost).
+   - **Folding a note** (space on it): any note, not only answers, folds to one line
+     that says so, and the header counts the folded ones, so none is forgotten. Kept for
+     the session only.
+   - **An agent definition** (`agent/agents/feature-review-ask.md`, as for the preparing
+     agent): its model, thinking level, tools and instructions in one place, found by
+     name as ATF finds definitions, so a user or project copy overrides fr's;
+     `agent.model` overrides the model alone.
+   - **A fresh agent**, briefed by the annotation file, rather than the preparing agent's
+     session (long, near its context limit). Resuming that session is possible (herdr
+     records it) and may be offered once tried on real reviews.
+
 Later: running the changed tests against the base, mutation testing on the changed
-lines, posting comments to the per-service PRs, and talking to the agent from inside the
-viewer (comments answered in place).
+lines, posting comments to the per-service PRs, and comments as questions answered in
+place (collected while reading, answered in one go).
 
 ## 13. Decisions on the former open questions (2026-11-21)
 
@@ -302,7 +338,7 @@ viewer (comments answered in place).
   the head (or the base, for removed code); the tool maps ranges to hunks. Ghost hunks
   use the same form on unchanged lines. Agents never compute hunk keys.
 - **Who runs the agent:** a separate command writes the annotation file; the viewer reads
-  it and reloads when it changes. The agent in a herdr pane answering comments is later.
+  it and reloads when it changes. The agent in a herdr pane answering questions: §12 step 5.
 - **Front end:** a terminal UI first. Neovim may come later over the same data.
 - **Glossary:** the code is the single source of truth. The names list (§8) compares
   names against what the existing code already calls the same thing. Whether a

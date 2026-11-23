@@ -14,7 +14,7 @@ done
 ln -sfn "$here/bin/fr.mjs" "$bin_dir/fr"
 
 echo "skill   -> $pi_dir/skills/feature-review"
-echo "agent   -> $pi_dir/agents/feature-review-prep.md"
+echo "agents  -> $pi_dir/agents/feature-review-prep.md, feature-review-ask.md"
 echo "command -> $bin_dir/fr"
 command -v fr >/dev/null || echo "note: $bin_dir is not on PATH"
 node -e 'process.exit(Number(process.versions.node.split(".")[0]) >= 25 ? 0 : 1)' 2>/dev/null || echo "note: fr needs Node 25 or newer (node --version)"

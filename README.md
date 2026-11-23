@@ -35,6 +35,36 @@ and tests, contracts and callers, then a verification pass that tries to refute 
 `writing.md` says where each result goes in fr's file. The skill uses
 the Agent Skills format, so harnesses other than Pi can load it too.
 
+## Asking while you review
+
+`A` asks an agent about the line under the cursor (in the overview: about the whole
+change). The question is written in the same multi-line field as a comment; fr sends it
+with the place (repository, file, line, hunk, group, the line's text or the note under
+the cursor) to an agent in a herdr pane beside fr. The first question opens that pane and
+starts the agent there (`agent.kind`, Pi by default) as the agent definition
+`feature-review-ask` (`agent/agents/feature-review-ask.md`: its model, thinking level,
+tools and instructions), named `fr-<feature>`, or
+`fr-<feature>-2` and so on when that name is taken. fr records its pane in
+`<dir>/.feature-review/agent.json` and only ever sends to that pane, never to another
+agent with a similar name.
+
+The agent answers in its pane, where you can go on talking to it ("this line" there
+means the cursor, which fr keeps in `<dir>/.feature-review/cursor.json`), and in the
+annotation file's `explanations`: under the line, your question above the answer, marked
+EXPLAINED and tinted apart from the prepared review, and in the overview's Questions tab.
+Until the answer is there, your question shows at its line as ASKED and the header counts
+the questions waiting: fr keeps what it sent in the review state, and the agent's answer
+carries the question's id. When it arrives, its block shows again if you hid its notes
+(`h`) or folded it, without moving your view. `f` `5` hides the answers; space folds one
+to a single line. Its instructions: `references/answering.md` in the
+skill. `A` needs herdr; outside it, it says so.
+
+**Which model.** The definition pins none, so the agent uses Pi's default, and the
+flash on starting it says which. Set `agent.model` (e.g. `"anthropic/claude-sonnet-5-5"`)
+for the ask agent alone, or uncomment `model:` and `thinking:` in a copy of the
+definition in `~/.pi/agent/agents` (install.sh links fr's; replace the link with a file).
+A running agent keeps its model: close its pane, and the next `A` starts a new one.
+
 ## Settings
 
 `~/.config/feature-review/config.toml` (or under `$XDG_CONFIG_HOME`). `fr config init`
@@ -48,6 +78,10 @@ in effect and where each comes from.
 | `viewer.lens` | `"groups"` | the lens to open in when there are annotations |
 | `viewer.highlight` | `"auto"` | `bat` when installed, `builtin`, `none` |
 | `viewer.editor` | `""` | the command `o` opens a line with; `""`: `$VISUAL`, else `$EDITOR`, else `vi` |
+| `agent.kind` | `"pi"` | the agent `A` starts beside fr, as herdr names it (`pi`, `claude`, `codex`, …; `$FR_AGENT` overrides it) |
+| `agent.definition` | `"feature-review-ask"` | the agent definition it runs as: fr's own, overridden by one of that name in `~/.pi/agent/agents` or the project's `.pi/agents`; `""`: none |
+| `agent.model` | `""` | its model, winning over the definition's (`""`: the definition's, else the agent's default; `$FR_AGENT_MODEL`) |
+| `agent.args` | `""` | extra arguments for it, split at spaces (`$FR_AGENT_ARGS`) |
 | `feedback.file` | `""` | where `!` appends its entries; `""`: `$XDG_STATE_HOME/feature-review/feedback.jsonl`, else `~/.local/state/…` (`$FR_FEEDBACK` overrides it) |
 | `theme.background` | `"auto"` | ask the terminal, or `light`, `dark`, `"#rrggbb"` where it does not answer (some multiplexers); `$FR_BACKGROUND` overrides it |
 | `theme.bat_light` | `"GitHub"` | bat's theme on a light background (`$BAT_THEME`, when set, wins for both) |
@@ -140,15 +174,17 @@ explain what fr has verified.
 | `v` | mark the hunk reviewed and go on to the next one (on a file line: the file) |
 | `V` | the whole file reviewed (again: not reviewed) |
 | `tab` | lens: the agent's groups, or the services |
-| `m` | the overview: design, names, contracts, rollout |
+| `m` | the overview: design, names, contracts, rollout, questions |
 | `]]` `[[` · `]h` `[h` · `]g` `[g` · `]c` `[c` | file (or part) · hunk · group (or service) · comment |
 | `gt` | from code to its test in the change, or back (`⏎` on a `TESTS` line: that file) |
 | `⏎` | on an unchanged caller in the diff: show its code, or hide it |
-| `f` | show or hide kinds of markers, notes and marks: `1` agent · `2` fr · `3` coverage · `4` comments · `0` all (`f` `1` `2` `4`: coverage alone) |
+| `f` | show or hide kinds of markers, notes and marks: `1` agent · `2` fr · `3` coverage · `4` comments · `5` questions · `0` all (`f` `1` `2` `4`: coverage alone) |
+| `h` | hide every note in the diff block under the cursor (findings, fr's notes, answers, the test's intent; the gutter marks and your comments stay); its `@@` title says how many; again: show them |
 | `a` | hide the annotations in and around the code: findings in the diff, fr's notes, test intents (their gutter marks stay; the intent, the groups' reasons and your comments stay); again: show them |
-| `space` `z` `Z` | fold the hunk · the file or group · all of them |
+| `space` `z` `Z` | fold the hunk (on a note: the note, to one line, counted in the header) · the file or group · all of them |
 | `c` · `e` · `x` | comment on the line (on a file line: the file) · edit · delete |
 | `o` | open the line in `$EDITOR` |
+| `A` | ask the agent beside fr about the line under the cursor (in the overview: the whole change); see "Asking while you review" |
 | `!` | feedback on what is under the cursor: `h` helped · `m` missing here · `w` wrong, then an optional note |
 | `s` · `r` · `/` · `?` · `q` | side by side ↔ inline · reload · search as you type (⏎ keeps the match, esc goes back) · help · quit |
 

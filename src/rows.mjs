@@ -12,9 +12,9 @@ import path from 'node:path';
 import { codeView, renderBlock } from './md/render.mjs';
 import { parseDoc } from './md/parse.mjs';
 import { highlightAsync } from './md/highlight.mjs';
-import { pad, plain, restyle, untab, wrapSegs } from './md/term.mjs';
+import { pad, plain, restyle, segsWidth, untab, wrapSegs } from './md/term.mjs';
 import { fileTexts } from './workspace.mjs';
-import { locate } from './state.mjs';
+import { locate, pendingQuestions } from './state.mjs';
 import { collectCallouts } from './inline.mjs';
 import { signalLayer } from './signals.mjs';
 import './ui/theme.mjs'; // the theme's named styles, the fallback until the viewer asks the terminal
@@ -159,11 +159,11 @@ function mdRows(text, width, base, { extra = '' } = {}) {
 }
 
 /** The kinds of markers the reader can show or hide (f): their notes and their marks. */
-export const LAYERS = ['agent', 'fr', 'coverage', 'comments'];
+export const LAYERS = ['agent', 'fr', 'coverage', 'comments', 'questions'];
 
 /** What every lens needs: the options, marks, located comments, highlighting. */
 function context(ws, st, opts) {
-  const show = { agent: true, fr: true, coverage: true, comments: true, ...opts.show };
+  const show = { agent: true, fr: true, coverage: true, comments: true, questions: true, ...opts.show };
   const marked = (k) => Boolean(st.marks[k]);
   const comments = show.comments ? st.comments.map((c) => ({ c, loc: locate(c, ws) })) : [];
   const all = ws.signals ?? { units: new Map(), files: new Map(), mechanical: new Set() };
@@ -174,9 +174,42 @@ function context(ws, st, opts) {
   const settled = (k) => marked(k) || all.mechanical.has(k);
   // what fr and the agent say about particular changed lines: shown under them, in the diff
   const { byUnit, inlined } = collectCallouts(ws, opts.ann);
-  const callouts = new Map([...byUnit].map(([u, list]) => [u, list.filter((c) => show[c.source === 'agent' ? 'agent' : c.layer])]));
+  // where a question was asked: its line now, and the hunk that has it
+  const askedAt = (q) => {
+    const loc = q?.line != null ? locate(q, ws) : null;
+    if (loc?.line == null) return null;
+    const h = loc.file.hunks.find((x) => x.lines.some(([, , o, n]) => (loc.side === 'old' ? o : n) === loc.line));
+    return h ? { h, side: loc.side, line: loc.line } : null;
+  };
+  // an answer goes where its question was asked (where the reviewer looks for it), whatever
+  // range it cites: the range stays marked in the gutter
+  const byId = new Map((st.questions ?? []).map((q) => [q.id, q]));
+  for (const [u, list] of [...byUnit]) {
+    for (const c of list.filter((x) => x.asked && byId.has(x.asked))) {
+      const at = askedAt(byId.get(c.asked));
+      if (!at) continue;
+      c.place = { side: at.side, line: at.line };
+      if (at.h.key !== u) {
+        byUnit.set(u, byUnit.get(u).filter((x) => x !== c));
+        byUnit.set(at.h.key, [...(byUnit.get(at.h.key) ?? []), c]);
+      }
+    }
+  }
+  // questions sent to the agent and not answered in the file yet: at their line, waiting
+  for (const q of pendingQuestions(st, opts.ann?.ann)) {
+    const at = askedAt(q);
+    if (!at) continue;
+    const { h } = at;
+    const loc = { side: at.side, line: at.line };
+    const c = { key: `asked:${q.id}`, asked: q.id, source: 'agent', layer: 'questions', pending: true, about: 'asked', level: 'info', label: 'ASKED', question: q.question, text: "waiting for the agent's answer (in its pane until then)", md: false, side: loc.side, from: loc.line, to: loc.line };
+    byUnit.set(h.key, [...(byUnit.get(h.key) ?? []), c]);
+  }
+  // a question just asked, and its answer, show whatever is hidden (h, a, f): the reader is waiting for them
+  const reveal = opts.reveal ?? new Set();
+  const revealed = (c) => Boolean(c.asked && reveal.has(c.asked));
+  const callouts = new Map([...byUnit].map(([u, list]) => [u, list.filter((c) => show[c.source === 'agent' ? (c.layer ?? 'agent') : c.layer] || revealed(c))]));
   const notes = show.agent ? notesByUnit(opts.ann, inlined) : new Map();
-  return { ws, st, ...opts, show, marked, settled, sig, comments, callouts, inlined, shown: new Set(), notes, placed: new Set() };
+  return { ws, st, ...opts, show, revealed, marked, settled, sig, comments, callouts, inlined, shown: new Set(), notes, placed: new Set() };
 }
 
 /**
@@ -302,7 +335,8 @@ const covers = (row, side, from, to) => {
   const n = row.at?.[side];
   return n != null && n >= from && n <= to;
 };
-const MARK = { agent: 'markagent', fr: 'markfr', comment: 'markcomment' };
+const MARK = { agent: 'markagent', fr: 'markfr', comment: 'markcomment', questions: 'markexplain' };
+const speaker = (c) => (c.layer === 'questions' ? 'questions' : c.source);
 // the coverage of an added line (JaCoCo): a test runs it, some branches not, none
 // dots, right after the line's number: a shape of their own, apart from the bars of findings
 const COVER = { covered: ['●', 'addfg'], partly: ['◐', 'yellow'], missed: ['○', 'delfg bold'] };
@@ -314,14 +348,39 @@ const GUTTER_MARK = 2; // the column for the marks of findings, and a space
  * speaker's colour. An unchanged caller shows its code on ⏎.
  */
 function calloutRows(ctx, c, base, indent) {
+  const rows = calloutBody(ctx, c, base, indent);
+  if (c.layer !== 'questions') return rows;
+  // an answer to the reviewer: tinted across the width, apart from the prepared review
+  const own = /\b(explain|asked|code)\b|48;/;
+  const tinted = rows.map((r) => {
+    const [first, ...rest] = r.segs;
+    return { ...r, segs: pad([first, ...rest.map((x) => (own.test(x[1] ?? '') ? x : restyle([x], 'explainband')[0]))], ctx.width, 'explainband') };
+  });
+  // a line of space above and below: it reads as an aside, not as part of the note before it
+  const gap = { ...rows[0], gap: true, segs: [[' '.repeat(indent), '']] };
+  return rows[0].folded ? tinted : [gap, ...tinted, gap];
+}
+
+function calloutBody(ctx, c, base, indent) {
   const fr = c.source === 'fr';
-  const bar = fr ? 'factbar' : 'agentbar';
-  const badge = fr ? (c.level === 'info' ? 'factsoft' : 'fact') : c.level === 'info' ? 'agentsoft' : 'agent';
+  const q = c.layer === 'questions';
+  const bar = q ? 'explainbar' : fr ? 'factbar' : 'agentbar';
+  const badge = q ? (c.pending ? 'asked' : 'explain') : fr ? (c.level === 'info' ? 'factsoft' : 'fact') : c.level === 'info' ? 'agentsoft' : 'agent';
   const w = Math.max(20, ctx.width - indent - 2);
   const open = c.expand && ctx.fold.get(`x:${c.key}`) === false;
   const meta = { kind: 'note', ...base, callout: c.key, about: c.about, ...(c.expand ? { expand: `x:${c.key}` } : {}) };
   const pre = [[' '.repeat(indent), ''], ['┃ ', bar]];
   const head = [[` ${c.label} `, badge]];
+  // folded (space): one line that says there is more
+  if (ctx.fold.get(`c:${c.key}`) === true) {
+    const first = String(c.question || plain(mdRows(String(c.text ?? ''), 1000, base)[0]?.segs ?? []) || '').split('\n')[0].trim();
+    const tail = '  ▸ folded · space shows it';
+    const room = Math.max(0, w - segsWidth(head) - tail.length - 2);
+    return [{ ...meta, folded: true, segs: [...pre, ...head, ['  ', ''], [first.length > room ? `${first.slice(0, Math.max(0, room - 1))}…` : first, q ? 'bold' : ''], [tail, 'yellow']] }];
+  }
+  // the question it answers, above the answer
+  const asked = q && c.question ? [{ ...meta, segs: [...pre, ['you asked', 'dim italic']] }, ...wrapSegs([[c.question, 'bold']], w).map((r) => ({ ...meta, segs: [...pre, ...r] }))] : [];
+  if (asked.length && c.pending) return [{ ...meta, segs: [...pre, ...head, ['  ', ''], [c.text, 'dim italic']] }, ...asked.slice(1)];
   if (c.expand) head.push([open ? '   ⏎ hide the code' : '   ⏎ show the code', 'dim']);
   // the code it names: beside the badge when it fits, else on a row of its own (shortened)
   const refRow = [];
@@ -342,8 +401,9 @@ function calloutRows(ctx, c, base, indent) {
   if (c.text) body = mdRows(c.text, w, base);
   const rows = [{ ...meta, segs: [...pre, ...head] }];
   if (refRow.length) rows.push({ ...meta, segs: [...pre, ...refRow] });
+  if (asked.length) rows.push(...asked, { ...meta, segs: [...pre] });
   // a one-line text fits beside the badge
-  if (body.length === 1 && !c.ref && headW + 2 + plain(body[0].segs).length <= w) rows[0].segs.push(['  ', ''], ...body[0].segs);
+  if (body.length === 1 && !c.ref && !asked.length && headW + 2 + plain(body[0].segs).length <= w) rows[0].segs.push(['  ', ''], ...body[0].segs);
   else for (const r of body) rows.push({ ...meta, segs: [...pre, ...r.segs] });
   if (c.found_by) rows.push({ ...meta, segs: [...pre, ['found by ', 'dim'], [c.found_by, 'dim italic']] });
   if (open) for (const r of citedRows({ ...ctx, width: w }, c.expand, base)) rows.push({ ...r, ...meta, segs: [...pre, ...r.segs] });
@@ -364,6 +424,10 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
   const callouts = ctx.callouts.get(h.key) ?? [];
   const hr = marked(h.key);
   const hf = isFolded(h.key, ctx.settled(h.key), fold);
+  // the notes of this hunk hidden (h), or of all (a): the code alone, the gutter marks stay
+  const quiet = ctx.quiet || fold.get(`q:${h.key}`) === true;
+  const whole0 = (ctx.sig.units.get(h.key) ?? []).filter((x) => !x.at);
+  const hiddenHere = !ctx.quiet && quiet && !hf ? callouts.filter((c) => !ctx.revealed(c)).length + whole0.length + (ctx.placed.has(h.key) ? 0 : (ctx.notes.get(h.key) ?? []).length) : 0;
   rows.push({
     kind: 'hunk',
     ...base,
@@ -378,17 +442,18 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
       ...(hf ? findingCount(ctx, h.key) : []),
       ...(hf && here.length ? [[`  ${plural(here.length, 'comment')}`, 'magenta']] : []),
       ...(hf && noteCount(ctx, h.key) ? [[`  ${hideNotes(ctx, [h.key])}`, 'cyan']] : []),
+      ...(hiddenHere ? [[`  ${plural(hiddenHere, 'note')} hidden · h shows them`, 'yellow']] : []),
     ],
   });
   // what fr found about the hunk as a whole (a line's own finding goes under the line)
   const whole = (ctx.sig.units.get(h.key) ?? []).filter((x) => !x.at);
-  if (!(hr && hf) && !ctx.quiet) rows.push(...signalRows(whole, { ...base, hunk: h.key }, { after: !hf }));
+  if (!(hr && hf) && !quiet) rows.push(...signalRows(whole, { ...base, hunk: h.key }, { after: !hf }));
   if (hf) return rows;
   const notes = ctx.placed.has(h.key) ? [] : (ctx.notes.get(h.key) ?? []);
   if (notes.length) ctx.placed.add(h.key);
   const nb = { ...base, hunk: h.key };
   // the test's intent before its code: what it should specify, then how it does
-  const intents = ctx.quiet ? [] : notes.filter((n) => n.kind === 'test').flatMap((n) => noteRows(ctx, n, nb));
+  const intents = quiet ? [] : notes.filter((n) => n.kind === 'test').flatMap((n) => noteRows(ctx, n, nb));
   if (intents.length) rows.push(...intents.slice(whole.length ? 1 : 0), spacer(nb));
 
   const lines = h.lines.map(([t, s, o, n]) => ({ t, s, old: o, new: n, hunk: h.key }));
@@ -401,11 +466,12 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
   // side by side, a finding about a new line goes under the new side, beside its line
   const split = code.some((row) => row.segs.some(([t, st]) => t === '│' && st === 'gray'));
   const half = Math.floor((width - GUTTER_MARK - 1) / 2);
-  const indentOf = (c) => (split && c.side === 'new' ? GUTTER_MARK + half + 1 + nw + 1 : indent);
+  // (an answer to the reviewer takes the whole width: it can hold a figure)
+  const indentOf = (c) => (split && c.side === 'new' && c.layer !== 'questions' ? GUTTER_MARK + half + 1 + nw + 1 : indent);
   // findings and comments go below the last row of their line
   const after = new Map();
   const put = (at, item) => after.set(at, [...(after.get(at) ?? []), item]);
-  for (const c of callouts) put(code.findLastIndex((row) => row.at?.[c.side] === c.to), { c });
+  for (const c of callouts) put(code.findLastIndex((row) => (c.place ? row.at?.[c.place.side] === c.place.line : row.at?.[c.side] === c.to)), { c });
   for (const x of here) {
     let at = -1;
     code.forEach((row, i) => {
@@ -422,11 +488,11 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
       const [t, st, ...more] = r.segs[0] ?? ['', ''];
       return t.startsWith(' ') ? { ...r, segs: [['▌', style], [t.slice(1), st, ...more], ...r.segs.slice(1)] } : r;
     });
-  const itemRows = ({ c, x }) => (c ? (ctx.quiet ? [] : bar(calloutRows(ctx, c, nb, indentOf(c)), MARK[c.source])) : bar(commentRowsOf(ctx, x, nb), MARK.comment));
+  const itemRows = ({ c, x }) => (c ? (quiet && !ctx.revealed(c) ? [] : bar(calloutRows(ctx, c, nb, indentOf(c)), MARK[speaker(c)])) : bar(commentRowsOf(ctx, x, nb), MARK.comment));
   const mark = (row) => {
-    const who = callouts.filter((c) => covers(row, c.side, c.from, c.to)).map((c) => c.source);
+    const who = callouts.filter((c) => covers(row, c.side, c.from, c.to)).map(speaker);
     if (here.some((x) => covers(row, x.loc.side, x.loc.line, x.loc.line))) who.push('comment');
-    const top = ['agent', 'fr', 'comment'].find((k) => who.includes(k));
+    const top = ['agent', 'fr', 'questions', 'comment'].find((k) => who.includes(k));
     return [top ? ['▌', MARK[top]] : [' ', ''], [' ', '']];
   };
   for (const it of after.get(-1) ?? []) rows.push(...itemRows(it));
@@ -434,7 +500,7 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
     rows.push({ ...row, segs: [...mark(row), ...row.segs] });
     for (const it of after.get(i) ?? []) rows.push(...itemRows(it));
   });
-  if (!ctx.quiet) for (const n of notes.filter((y) => y.kind !== 'test')) rows.push(...noteRows(ctx, n, nb));
+  if (!quiet) for (const n of notes.filter((y) => y.kind !== 'test')) rows.push(...noteRows(ctx, n, nb));
   return rows;
 }
 
@@ -774,9 +840,9 @@ function groupsLens(ctx) {
  * intents, notes under hunks; their gutter marks stay. The intent, a group's why and a
  * part's note stay: they are above the code, not in it).
  */
-export function buildRows(ws, st, { width = 120, layout = 'auto', fold = new Map(), hl = new Map(), tint = true, lens = 'services', ann = null, quiet = false, show = {} } = {}) {
+export function buildRows(ws, st, { width = 120, layout = 'auto', fold = new Map(), hl = new Map(), tint = true, lens = 'services', ann = null, quiet = false, show = {}, reveal = new Set() } = {}) {
   if (lens === 'groups' && !ann?.groups?.length) lens = 'services';
-  const ctx = context(ws, st, { width, layout, fold, hl, tint, lens, ann, quiet, show });
+  const ctx = context(ws, st, { width, layout, fold, hl, tint, lens, ann, quiet, show, reveal });
   const body = lens === 'groups' ? groupsLens(ctx) : servicesLens(ctx);
   // notes on no hunk, or under a hunk this view does not show: never lost
   const rest = [...ctx.notes].filter(([u]) => !ctx.placed.has(u)).flatMap(([, list]) => list);

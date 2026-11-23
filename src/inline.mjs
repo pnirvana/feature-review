@@ -90,5 +90,13 @@ export function collectCallouts(ws, ann) {
       if (inChange(a)) add(unitFor(a), { ...c, key: `finding:${i}:also:${j}`, md: false, text: `see the finding at ${where(r)}`, ...span(a) });
     });
   });
+
+  // answers to the reviewer's questions, at the line they are about (f 5 hides them)
+  list('explanations').forEach((e, i) => {
+    const r = e?.ref ? res(e.ref) : null;
+    if (!inChange(r)) return;
+    inlined.add(e);
+    add(unitFor(r), { key: `explain:${i}`, source: 'agent', layer: 'questions', about: 'agent:explanation', level: 'info', label: 'EXPLAINED', ...(e.asked ? { asked: String(e.asked) } : {}), question: String(e.question ?? '').trim(), text: e.answer ?? '', md: true, ...span(r) });
+  });
   return { byUnit, inlined };
 }

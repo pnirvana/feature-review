@@ -14,6 +14,7 @@ export const TABS = [
   { id: 'names', title: 'Names', count: (a) => (Array.isArray(a.names) ? a.names.length : 0) },
   { id: 'contracts', title: 'Contracts', count: (a) => (Array.isArray(a.contracts) ? a.contracts.length : 0) },
   { id: 'rollout', title: 'Rollout', count: (a) => (a.rollout && typeof a.rollout === 'object' ? 1 : 0) },
+  { id: 'questions', title: 'Questions', count: (a) => (Array.isArray(a.explanations) ? a.explanations.length : 0) },
 ];
 
 const BADGE = { high: 'riskhigh', medium: 'riskmedium', low: 'risklow', broken: 'riskhigh', unclear: 'riskmedium', ok: 'risklow', no: 'riskhigh', yes: 'risklow' };
@@ -64,7 +65,7 @@ function refRows(ctx, ref, { indent = 2, label = null, note = null } = {}) {
 }
 
 /** A heading on a band; a badge keeps its own background. */
-const OWN_BG = /\b(risk\w+|role|fact)\b|(^|[ ;])48;/;
+const OWN_BG = /\b(risk\w+|role|fact|explain|asked)\b|(^|[ ;])48;/;
 const heading = (segs, width) => ({ kind: 'item', segs: pad(segs.map((x) => (OWN_BG.test(x[1] ?? '') ? x : restyle([x], 'band')[0])), width, 'band') });
 const empty = (what) => [{ kind: 'text', segs: [[`  The agent wrote no ${what}.`, 'dim']] }];
 
@@ -210,12 +211,38 @@ function rollout(ctx) {
 }
 
 /**
+ * The reviewer's questions and the agent's answers (the ask key), in the order asked: the
+ * general ones only here, the ones about a line also under that line in the diff.
+ */
+function questions(ctx) {
+  const list = Array.isArray(ctx.ann.explanations) ? ctx.ann.explanations : [];
+  const rows = [];
+  // asked, not answered in the file yet
+  ctx.waiting.forEach((q, i) => {
+    rows.push(...(i ? [spacer()] : []), heading([[' ', ''], [' ASKED ', 'asked'], ['  ', ''], [String(q.question).split('\n')[0].slice(0, ctx.width - 12), 'bold']], ctx.width));
+    rows.push({ kind: 'text', segs: [[`  ${q.file ? `about ${q.repo}/${q.file}${q.line != null ? `:${q.side === 'old' ? '-' : '+'}${q.line}` : ''}` : 'about the whole change'} · waiting for the agent's answer`, 'dim']] });
+  });
+  if (rows.length) rows.push(spacer(), spacer());
+  if (!list.length && rows.length) return rows;
+  if (!list.length) return [{ kind: 'text', segs: [['  No questions yet. A asks the agent about the line under the cursor, or (here) about the whole change.', 'dim']] }];
+  list.forEach((e, i) => {
+    if (i) rows.push(spacer(), spacer());
+    rows.push(heading([[' ', ''], [' EXPLAINED ', 'explain'], ['  ', ''], [String(e?.question ?? '?').split('\n')[0].slice(0, ctx.width - 6), 'bold']], ctx.width));
+    const more = String(e?.question ?? '').split('\n').slice(1).join('\n').trim();
+    if (more) rows.push(...md(more, ctx.width, 4, 'dim'));
+    rows.push(...(e?.ref ? refRows(ctx, e.ref, { label: 'about' }) : [{ kind: 'text', segs: [['  about the whole change', 'dim']] }]));
+    if (str(e?.answer)) rows.push(spacer(), ...md(e.answer, ctx.width));
+  });
+  return rows;
+}
+
+/**
  * One tab's rows. checked: checkAnnotations() plus {ann}; expanded: the refs whose code is
  * shown. Rows: kind 'item' | 'text' | 'ref' (ref, res: a jump target) | 'code' | 'blank'.
  */
-export function overviewRows(checked, tab, { width = 100, expanded = new Set() } = {}) {
-  const ctx = { ann: checked?.ann ?? {}, refs: checked?.refs ?? new Map(), width, expanded };
-  const fn = { design, names, contracts, rollout }[tab];
+export function overviewRows(checked, tab, { width = 100, expanded = new Set(), waiting = [] } = {}) {
+  const ctx = { ann: checked?.ann ?? {}, refs: checked?.refs ?? new Map(), width, expanded, waiting };
+  const fn = { design, names, contracts, rollout, questions }[tab];
   return fn ? fn(ctx) : [];
 }
 

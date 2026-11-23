@@ -1,9 +1,12 @@
 ---
 name: feature-review
-description: Prepare a feature's change for human review with fr (feature review). Investigates the change across the feature's worktrees (behaviour, design, language and tests, contracts and callers) and writes the annotation file fr shows beside the diff, as groups in reading order, findings at their lines, tests as a specification, unchanged callers, contracts and rollout. Use when assigned to prepare a review of a feature directory, usually as an ATF task started by the coordinator after the implementing agents are done.
+description: Prepare a feature's change for human review with fr (feature review). Investigates the change across the feature's worktrees (behaviour, design, language and tests, contracts and callers) and writes the annotation file fr shows beside the diff, as groups in reading order, findings at their lines, tests as a specification, unchanged callers, contracts and rollout. Use when assigned to prepare a review of a feature directory, usually as an ATF task started by the coordinator after the implementing agents are done. Also use when answering the questions of a reviewer reading a feature in fr (the ask key).
 ---
 
 # Prepare a feature review
+
+(Started by fr's ask key to answer the reviewer's questions instead? Read
+`references/answering.md`: that is your task, not the procedure below.)
 
 You prepare a change for a human reviewer. You did not write the change, and you do not
 approve, fix or edit it. The reviewer reads the diff in `fr`, the feature-review viewer,
@@ -28,6 +31,7 @@ The references in this skill folder, read each before the step that needs it:
 | `references/language.md` | names, and tests as requirements |
 | `references/contracts.md` | unchanged callers, contracts, consumers, rollout |
 | `references/verification.md` | the last pass: try to refute what you wrote |
+| `references/answering.md` | later, beside fr: answering the reviewer's questions |
 
 ## Hard rules
 
