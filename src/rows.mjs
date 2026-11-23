@@ -794,6 +794,11 @@ export function buildRows(ws, st, { width = 120, layout = 'auto', fold = new Map
     top.push(spacer(), spacer(), { kind: 'note', segs: [['Intent', 'bold']] });
     top.push(...mdRows(ann.ann.intent, width - 2, {}).map((r) => ({ ...r, segs: [['  ', ''], ...r.segs] })));
   }
+  // how the change works as a whole (Markdown, figures welcome): before any code
+  if (ann?.ann?.overview && ctx.show.agent) {
+    top.push(spacer(), spacer(), { kind: 'note', about: 'agent:overview', segs: [['How it works', 'bold']] });
+    top.push(...mdRows(ann.ann.overview, width - 2, {}).map((r) => ({ ...r, about: 'agent:overview', segs: [['  ', ''], ...r.segs] })));
+  }
   top.push(spacer(), spacer());
   return [...top, ...body];
 }

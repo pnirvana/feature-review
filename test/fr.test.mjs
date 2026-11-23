@@ -7,6 +7,7 @@ import path from 'node:path';
 import { makeSample, sampleAnnotations } from './fixture.mjs';
 import { parsePatch, hunkKey, discover, loadWorkspace, units, MANIFEST } from '../src/workspace.mjs';
 import { readState, update, setMarks, addComment, locate } from '../src/state.mjs';
+import { overviewRows } from '../src/overview.mjs';
 import { buildRows, readingOrder, UNGROUPED } from '../src/rows.mjs';
 import { checkAnnotations, unitIds, stamp, staleness, resolver } from '../src/annotations.mjs';
 import { plain } from '../src/md/term.mjs';
@@ -361,6 +362,38 @@ test('the intent shows on top in both lenses', async () => {
 });
 
 // ---------- ghosts and test notes in place ----------
+
+test('an overview with a drawn figure; a finding also at other lines; a contract of unknown kind', async () => {
+  const ws = await loadWorkspace(dir);
+  const ann = sampleAnnotations();
+  ann.overview = 'The key travels with the request:\n\n```diagram\n  gateway ──key──► refund-service\n     │                  │\n     │            seen.add(key)\n     ▼                  ▼\n  (no check)         ledger.book\n```';
+  ann.findings[0].also = [{ repo: 'refund-service', file: 'src/main/java/shop/refund/RefundService.java', lines: '4' }];
+  ann.contracts = [{ name: 'refund call', kind: 'unknown', producer: { ref: { repo: 'gateway', file: 'src/main/java/shop/gateway/RefundController.java', lines: '7' } }, consumers: [], compatible: 'unclear' }];
+  const checked = { ann, ...(await checkAnnotations(ann, ws)) };
+  assert.deepEqual(checked.errors, []);
+  assert.ok(!checked.warnings.some((w) => /pasted code/.test(w.msg)), JSON.stringify(checked.warnings)); // a figure, not pasted code
+  // a fence of code still warns
+  const pasted = { ...ann, overview: '```java\na();\nb();\nc();\nd();\n```' };
+  assert.ok((await checkAnnotations(pasted, ws)).warnings.some((w) => /pasted code/.test(w.msg)));
+  for (const lens of ['groups', 'services']) {
+    const rows = buildRows(ws, { marks: {}, comments: [] }, { width: 110, tint: false, lens, ann: checked });
+    const t = text(rows);
+    const how = rows.findIndex((r) => /^How it works/.test(plain(r.segs)));
+    assert.ok(how > 0 && how < rows.findIndex((r) => r.kind === 'code'), `${lens}: before any code`);
+    assert.match(t, /gateway ──key──► refund-service/); // drawn as written
+    // under new line 4 of RefundService: a pointer to the finding, the line marked
+    const ptr = rows.findIndex((r) => /DELETED CHECK +see the finding at gateway\/RefundController\.java:-7-9/.test(plain(r.segs)));
+    assert.ok(ptr > 0, `${lens}: the pointer is shown`);
+    const line = rows.slice(0, ptr).findLast((r) => r.kind === 'code'); // other notes on line 4 may come first
+    assert.equal(line.at?.new, 4);
+    assert.match(plain(line.segs).slice(0, 4), /▌/);
+    // a hidden agent layer hides it; a: the overview stays (it is above the code)
+    assert.doesNotMatch(text(buildRows(ws, { marks: {}, comments: [] }, { width: 110, tint: false, lens, ann: checked, show: { agent: false } })), /How it works/);
+    assert.match(text(buildRows(ws, { marks: {}, comments: [] }, { width: 110, tint: false, lens, ann: checked, quiet: true })), /How it works/);
+  }
+  // and in the overview's design tab
+  assert.match(overviewRows(checked, 'design', { width: 110 }).map((r) => plain(r.segs)).join('\n'), /How it works[\s\S]*gateway ──key──► refund-service/);
+});
 
 test('findings sit under their line in the diff; the test intent before its code; nothing is lost', async () => {
   const ws = await loadWorkspace(dir);

@@ -70,8 +70,10 @@ const empty = (what) => [{ kind: 'text', segs: [[`  The agent wrote no ${what}.`
 
 function design(ctx) {
   const list = Array.isArray(ctx.ann.design) ? ctx.ann.design : [];
-  if (!list.length) return empty('design notes');
   const rows = [];
+  // how the change works as a whole, then type by type
+  if (str(ctx.ann.overview)) rows.push(heading([[' How it works', 'bold']], ctx.width), spacer(), ...md(ctx.ann.overview, ctx.width), spacer(), spacer());
+  if (!list.length) return rows.length ? rows : empty('design notes');
   list.forEach((d, i) => {
     if (i) rows.push(spacer(), spacer());
     rows.push(heading([[' ', ''], [String(d.type ?? '?'), 'bold'], ['   ', ''], ...(d.change ? [badge(d.change, 'role'), [' ', '']] : []), ...(d.layer ? [[d.layer, 'dim']] : [])], ctx.width));

@@ -9,6 +9,32 @@ Needs only git and Node 25 or later; `bat` is used for highlighting when it is t
 Colours come from the terminal's theme (light or dark, e.g. any Catppuccin flavour): the
 viewer asks the terminal for its background and palette and mixes every tint from them.
 
+## Install (on the devpod)
+
+```
+./install.sh
+```
+
+It links `fr` into `~/.local/bin`, and the review-preparing agent into Pi
+(`~/.pi/agent`): the skill `feature-review` and the agent definition
+`feature-review-prep`. Nothing is downloaded. Safe to run again.
+
+## Preparing a review: the agent
+
+The annotations come from a dedicated agent, not the one that made the change. The ATF
+coordinator starts it as a task once the implementing agents are done, for example
+`atf-herdr spawn T9 --agent feature-review-prep`. The task names the feature directory,
+the intent (the issue text) and any other checkouts to search for consumers. The agent
+reads the change and writes `<dir>/.feature-review/annotations.json`. It changes no
+code. It runs `fr check` until the file is clean, stamps it, and finishes the task with
+how to open the review and what needs a real read.
+
+`agent/skill/feature-review/SKILL.md` holds its procedure and rules. Its references
+hold the method, one file per concern as in review-agents: behaviour, design, language
+and tests, contracts and callers, then a verification pass that tries to refute it all;
+`writing.md` says where each result goes in fr's file. The skill uses
+the Agent Skills format, so harnesses other than Pi can load it too.
+
 ## Settings
 
 `~/.config/feature-review/config.toml` (or under `$XDG_CONFIG_HOME`). `fr config init`

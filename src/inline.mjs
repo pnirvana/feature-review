@@ -9,6 +9,7 @@
 import { hunkRange } from './annotations.mjs';
 import { signalLayer } from './signals.mjs';
 
+const where = (r) => `${r.repo}/${r.file.split('/').pop()}:${r.side === 'old' ? '-' : ''}${r.from === r.to ? r.from : `${r.from}-${r.to}`}`;
 const human = (kind) => String(kind ?? '').replace(/[-_]/g, ' ').toUpperCase();
 const CALLER = { broken: 'BREAKS A CALLER', unclear: 'CALLER TO CHECK', ok: 'CALLER STILL FINE' };
 
@@ -82,7 +83,12 @@ export function collectCallouts(ws, ann) {
     const r = res(f?.ref);
     if (!inChange(r)) return;
     inlined.add(f);
-    add(unitFor(r), { key: `finding:${i}`, source: 'agent', about: `agent:finding${f?.kind ? `:${f.kind}` : ''}`, level: f.severity === 'low' ? 'info' : 'warn', label: human(f.kind || 'finding'), text: f.note ?? '', md: true, ...span(r) });
+    const c = { key: `finding:${i}`, source: 'agent', about: `agent:finding${f?.kind ? `:${f.kind}` : ''}`, level: f.severity === 'low' ? 'info' : 'warn', label: human(f.kind || 'finding'), md: true };
+    add(unitFor(r), { ...c, text: f.note ?? '', ...span(r) });
+    // the other lines the same problem shows at: marked, with a pointer to the finding
+    (Array.isArray(f.also) ? f.also : []).map(res).forEach((a, j) => {
+      if (inChange(a)) add(unitFor(a), { ...c, key: `finding:${i}:also:${j}`, md: false, text: `see the finding at ${where(r)}`, ...span(a) });
+    });
   });
   return { byUnit, inlined };
 }

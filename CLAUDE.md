@@ -23,8 +23,11 @@ coverage of the changed lines. Step 4, the feedback key (`!`, `fr feedback`,
 
 - The user reviews Java/Spring/DDD services built with Maven, but the stack is
   polyglot: Groovy/Spock tests, Python, Ansible, Helm, Kubernetes and more. Agents run
-  with Pi on a devpod, inside herdr. The agent definitions are written on the target
-  machine: this project defines the method and the annotation format, not the agent.
+  with Pi on a devpod, inside herdr. This project defines the method and the annotation
+  format, and ships a reference agent that prepares a review (`agent/`: a portable
+  skill plus a Pi agent definition, linked by `install.sh`). The ATF coordinator starts
+  it once the implementing agents are done; it is not the agent that made the change.
+  It is adapted on the target machine as needed.
 - **Two machines:** this one (private) is for development; the tool is used on a
   corporate machine where installing tools may not be allowed. Depend only on git and
   Node; every other tool is optional, and a missing one costs a signal, never a failure.

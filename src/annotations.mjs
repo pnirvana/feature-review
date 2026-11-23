@@ -25,7 +25,7 @@ export const ENUMS = {
   nameFlag: ['ok', 'technical', 'differs-from-codebase', 'inconsistent-across-services'],
   testFlag: ['name-vs-assertion', 'loosened', 'expected-changed-with-code', 'removed', 'disabled', 'timeout-raised', 'mocks-unit-under-test', 'catch-all', 'snapshot-regenerated'],
   status: ['ok', 'broken', 'unclear'],
-  contractKind: ['event', 'http', 'grpc', 'schema', 'db', 'config', 'helm-values'],
+  contractKind: ['event', 'http', 'grpc', 'schema', 'db', 'config', 'helm-values', 'unknown'],
   compatible: ['yes', 'no', 'unclear'],
 };
 
@@ -173,7 +173,7 @@ export async function checkAnnotations(ann, ws) {
 
   if (!ann || typeof ann !== 'object' || Array.isArray(ann)) return { errors: [{ at: '', msg: 'the file must hold a JSON object' }], warnings, groups: [], ungrouped: ids.map((u) => u.id), multi: [], refs, ids };
   if (ann.version !== 1) err('version', 'must be 1');
-  const known = ['version', 'intent', 'written', 'groups', 'findings', 'design', 'names', 'tests', 'ghosts', 'contracts', 'rollout'];
+  const known = ['version', 'intent', 'overview', 'written', 'groups', 'findings', 'design', 'names', 'tests', 'ghosts', 'contracts', 'rollout'];
   for (const k of Object.keys(ann)) if (!known.includes(k)) warn(k, 'unknown field, ignored');
   for (const k of ['groups', 'findings', 'design', 'names', 'tests', 'ghosts', 'contracts']) if (ann[k] !== undefined && !Array.isArray(ann[k])) err(k, 'must be a list');
 
@@ -206,7 +206,8 @@ export async function checkAnnotations(ann, ws) {
   const prose = (x, at) => {
     if (typeof x === 'string') {
       if (!x.includes('```') && !x.includes('~~~')) return;
-      for (const b of parseDoc(x).filter((y) => y.kind === 'code' && y.body.length > MAX_PASTED_LINES))
+      // a ```diagram fence is a figure drawn by the agent, not pasted code
+      for (const b of parseDoc(x).filter((y) => y.kind === 'code' && y.lang !== 'diagram' && y.body.length > MAX_PASTED_LINES))
         warn(at, `${b.body.length} lines of pasted code: cite the code instead (a ref), so it comes from git`);
     } else if (Array.isArray(x)) x.forEach((y, i) => prose(y, `${at}[${i}]`));
     else if (x && typeof x === 'object' && !isRef(x)) for (const [k, v] of Object.entries(x)) if (k !== 'written') prose(v, at ? `${at}.${k}` : k);
@@ -264,6 +265,11 @@ export async function checkAnnotations(ann, ws) {
     oneOf(f.severity, ENUMS.risk, `${at}.severity`);
     const r = refs.get(f.ref);
     if (r?.ok && (r.external || !r.units.length)) warn(`${at}.ref`, 'cites no changed line: a finding is shown under the changed line it is about (unchanged code that should have changed: a ghost)');
+    // other lines the same problem shows at (a cause in one service, its effect in another)
+    if (f.also !== undefined) {
+      if (!Array.isArray(f.also)) err(`${at}.also`, 'must be a list of citations');
+      else f.also.forEach((x, j) => needRef(x, `${at}.also[${j}]`));
+    }
   });
   each('ghosts', (g, at) => {
     needRef(g.ref, `${at}.ref`);

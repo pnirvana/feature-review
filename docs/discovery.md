@@ -36,8 +36,10 @@ it be checked for consistency as a whole, but it means more code at once.
   changed ones. This matters for consumers, callers and precedent (§5, §6).
 - **The stack (target machine):** Java and Spring services, DDD, Maven, but polyglot:
   Groovy/Spock tests, Python, Ansible, Helm, Kubernetes and more (§13). Agents run with
-  Pi on a devpod, inside herdr. The agent definitions are made on the target machine,
-  so this project defines the format and the method, not the agent itself.
+  Pi on a devpod, inside herdr. This project defines the format and the method, and
+  ships a reference agent (`agent/`, decided 2026-11-22): a dedicated agent that
+  prepares the review, started by the ATF coordinator after the implementing agents
+  are done, never the agent that made the change. It is adapted on the target machine.
 
 ## 3. The core decision: code first, notes on top
 
