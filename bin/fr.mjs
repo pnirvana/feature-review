@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 import { loadWorkspace } from '../src/workspace.mjs';
-import { readState } from '../src/state.mjs';
+import { readState, withoutDeleted } from '../src/state.mjs';
 import { buildRows, highlightFiles } from '../src/rows.mjs';
 import { annotationsPath, readAnnotations, checkAnnotations, unitIds, hunkRange, stamp } from '../src/annotations.mjs';
 import { fit, plain } from '../src/md/term.mjs';
@@ -188,6 +188,7 @@ async function view() {
     const width = Number(o.width) || process.stdout.columns || 120;
     const { ann, error } = readAnnotations(ws.root);
     if (error) console.error(`fr: ${error}`);
+    withoutDeleted(ann, st); // the explanations the reviewer deleted
     const checked = ann ? await checkAnnotations(ann, ws) : null;
     const hl = await highlightFiles(ws, o.plain ? 'none' : set['viewer.highlight']);
     if (o.overview) {

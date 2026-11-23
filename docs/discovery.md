@@ -304,6 +304,9 @@ Built in this order, each step usable on its own:
    - **Folding a note** (space on it): any note, not only answers, folds to one line
      that says so, and the header counts the folded ones, so none is forgotten. Kept for
      the session only.
+   - **Deleting an answer** (`x`) is the reviewer's: kept in the review state, not done
+     in the agent's file. The agent rewrites that file whole and would bring a deleted
+     entry back; and fr writing a file another process writes invites lost updates.
    - **An agent definition** (`agent/agents/feature-review-ask.md`, as for the preparing
      agent): its model, thinking level, tools and instructions in one place, found by
      name as ATF finds definitions, so a user or project copy overrides fr's;

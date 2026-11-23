@@ -56,7 +56,10 @@ Until the answer is there, your question shows at its line as ASKED and the head
 the questions waiting: fr keeps what it sent in the review state, and the agent's answer
 carries the question's id. When it arrives, its block shows again if you hid its notes
 (`h`) or folded it, without moving your view. `f` `5` hides the answers; space folds one
-to a single line. Its instructions: `references/answering.md` in the
+to a single line. `x` on an answer you no longer need (in the diff or the Questions tab), twice,
+deletes it with its question, and `x` on a question still waiting deletes that. The
+deletion is kept in the review state, not in the agent's file (the agent rewrites it and
+would bring the answer back): fr shows it nowhere again, `--print` included. Its instructions: `references/answering.md` in the
 skill. `A` needs herdr; outside it, it says so.
 
 **Which model.** The definition pins none, so the agent uses Pi's default, and the
@@ -182,7 +185,7 @@ explain what fr has verified.
 | `h` | hide every note in the diff block under the cursor (findings, fr's notes, answers, the test's intent; the gutter marks and your comments stay); its `@@` title says how many; again: show them |
 | `a` | hide the annotations in and around the code: findings in the diff, fr's notes, test intents (their gutter marks stay; the intent, the groups' reasons and your comments stay); again: show them |
 | `space` `z` `Z` | fold the hunk (on a note: the note, to one line, counted in the header) · the file or group · all of them |
-| `c` · `e` · `x` | comment on the line (on a file line: the file) · edit · delete |
+| `c` · `e` · `x` | comment on the line (on a file line: the file) · edit · delete (`x` on an answer or a waiting question: delete it, twice) |
 | `o` | open the line in `$EDITOR` |
 | `A` | ask the agent beside fr about the line under the cursor (in the overview: the whole change); see "Asking while you review" |
 | `!` | feedback on what is under the cursor: `h` helped · `m` missing here · `w` wrong, then an optional note |

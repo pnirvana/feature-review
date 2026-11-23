@@ -79,6 +79,36 @@ export function pendingQuestions(st, ann) {
   return (st?.questions ?? []).filter((q) => !answered.has(q.id));
 }
 
+/**
+ * An explanation's id: the question's (asked), else one from its question and answer (an
+ * answer to a question typed in the agent's pane has no id of its own).
+ */
+export const explanationId = (e) => (e?.asked ? String(e.asked) : `x-${crypto.createHash('sha1').update(`${e?.question ?? ''}\n${e?.answer ?? ''}`).digest('hex').slice(0, 12)}`);
+
+/**
+ * Deletes an explanation the reviewer no longer needs, and its question: kept in the review
+ * state, not removed from the annotation file (the agent rewrites that file, and would
+ * bring it back). fr shows it nowhere from then on.
+ */
+export function deleteExplanation(st, e) {
+  const id = explanationId(e);
+  (st.deleted ??= []).push({ id, question: String(e?.question ?? ''), at: new Date().toISOString() });
+  st.questions = (st.questions ?? []).filter((q) => q.id !== id);
+}
+
+/** Deletes a question still waiting for its answer (the answer, when it comes, is not shown). */
+export function deleteQuestion(st, id) {
+  st.questions = (st.questions ?? []).filter((q) => q.id !== id);
+  (st.deleted ??= []).push({ id, at: new Date().toISOString() });
+}
+
+/** The annotations without the explanations the reviewer deleted (ann is changed in place). */
+export function withoutDeleted(ann, st) {
+  const gone = new Set((st?.deleted ?? []).map((d) => d.id));
+  if (ann && Array.isArray(ann.explanations) && gone.size) ann.explanations = ann.explanations.filter((e) => !gone.has(explanationId(e)));
+  return ann;
+}
+
 const norm = (s) => String(s ?? '').replace(/\s+/g, ' ').trim();
 
 /**

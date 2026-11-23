@@ -5,7 +5,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { loadWorkspace } from './workspace.mjs';
-import { readState, update, setMarks, addComment, editComment, deleteComment, addQuestion, pendingQuestions } from './state.mjs';
+import { readState, update, setMarks, addComment, editComment, deleteComment, addQuestion, pendingQuestions, deleteExplanation, deleteQuestion, withoutDeleted } from './state.mjs';
 import crypto from 'node:crypto';
 import { buildRows, highlightFiles, fid, unitsOf, readingOrder, groupFoldId, UNGROUPED, LAYERS } from './rows.mjs';
 
@@ -34,7 +34,7 @@ const HELP = [
   'V               reviewed: the whole file under the cursor (again: not reviewed)',
   'space           fold the hunk (on a file or group line: that)   z  the file or group   Z  all of them',
   'c               comment on the line under the cursor (on a file or hunk line: the file)',
-  'e x             on a comment: edit it / delete it (x twice)',
+  'e x             on a comment: edit it / delete it (x twice); x on an answer or a question: delete it',
   'o               open the line in $EDITOR',
   'A               ask the agent beside fr about the line under the cursor (in the overview: the whole change);',
   '                it answers in its pane and in the review: under the line, marked EXPLAINED (ASKED until then)',
@@ -130,6 +130,7 @@ export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askH
   async function loadAnnotations(ws) {
     const { ann, error } = readAnnotations(ws.root);
     ui.annError = error ?? null;
+    withoutDeleted(ann, ui.st ?? readState(ws.root)); // the explanations the reviewer deleted
     try {
       ui.ann = ann ? { ann, ...(await checkAnnotations(ann, ws)) } : null;
     } catch (e) {
@@ -249,7 +250,7 @@ export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askH
     return `${x.repo.name}/${x.f.file}${l}`;
   }
   const KEYS = 'tab lens  m overview  a annotations  f markers  j/k move  ]] file  ]u not reviewed  v reviewed  space fold  c comment  h hide notes  A ask  ! feedback  o editor  s layout  / search  ? help  q quit';
-  const OV_KEYS = 'h/l or 1-5 tab  j/k move  ⏎ to the code  A ask  m/esc back to the review  q quit';
+  const OV_KEYS = 'h/l or 1-5 tab  j/k move  ⏎ to the code  A ask  x delete (Questions)  m/esc back to the review  q quit';
   function footer() {
     const w = W();
     if (ui.input) {
@@ -534,6 +535,7 @@ export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askH
     else if (/^[1-9]$/.test(k) && TABS[Number(k) - 1]) ovTab(TABS[Number(k) - 1].id);
     else if (k === '\r') return void (ovEnter(), draw());
     else if (k === 'A') return startAsk();
+    else if (k === 'x' && ui.ov.rows[ui.ov.cur]?.del) return deleteAnswer(ui.ov.rows[ui.ov.cur].del, () => ui.cur);
     else if (k === 'm' || k === '\x1b') (ui.lastTab = ui.ov.tab), (ui.ov = null);
     else if (k === 'q') return quit();
     else if (k === '?') ui.help = true;
@@ -873,6 +875,11 @@ export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askH
   }
   function deleteAt() {
     const r = ui.rows[ui.cur];
+    if (r?.kind === 'note' && /^(explain|asked):/.test(r.callout ?? '')) return deleteAnswer(r.callout, () => {
+      // the cursor goes to the line it was about
+      const i = ui.rows.slice(0, ui.cur).findLastIndex((x) => x.hunk === r.hunk && (x.kind === 'code' || x.kind === 'hunk'));
+      return i >= 0 ? i : ui.cur;
+    });
     if (!r?.comment) return flash('no comment here', 'yellow');
     if (!(ui.confirm?.what === r.comment && ui.confirm.until > Date.now())) {
       ui.confirm = { what: r.comment, until: Date.now() + 3000 };
@@ -880,6 +887,28 @@ export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askH
     }
     ui.confirm = null;
     if (save((st) => deleteComment(st, r.comment))) relayout(), flash('comment deleted');
+  }
+
+  /**
+   * x on an answer (explain:<i>) or a question waiting (asked:<id>), twice: deleted for the
+   * reviewer (the review state; the agent's file keeps it). at(): where the cursor goes.
+   */
+  function deleteAnswer(key, at) {
+    if (!(ui.confirm?.what === key && ui.confirm.until > Date.now())) {
+      ui.confirm = { what: key, until: Date.now() + 3000 };
+      return flash(key.startsWith('asked:') ? 'delete this question? x again' : 'delete this explanation and its question? x again', 'yellow');
+    }
+    ui.confirm = null;
+    const [kind, id] = key.split(':');
+    const e = kind === 'explain' ? ui.ann?.ann?.explanations?.[Number(id)] : null;
+    if (kind === 'explain' && !e) return flash('not found: reloaded meanwhile? try again', 'yellow');
+    const change = () => {
+      if (!save((st) => (e ? deleteExplanation(st, e) : deleteQuestion(st, id)))) return;
+      if (e) ui.ann.ann.explanations = ui.ann.ann.explanations.filter((x) => x !== e);
+    };
+    if (ui.ov) change(), relayout(), ovLayout(), ovMove(0), draw();
+    else keepInPlace(at(), change);
+    flash(e ? 'explanation deleted' : 'question deleted');
   }
 
   // ---------- the ask key: questions to the agent beside fr ----------

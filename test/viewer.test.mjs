@@ -540,3 +540,37 @@ test('h and space on a note leave what you look at where it is on the screen', a
   await term.type(' ');
   assert.match(term.screen()[first], /EXPLAINED.*▸ folded/);
 });
+
+test('x deletes an answer the reviewer no longer needs, with its question: in the diff, in the Questions tab, a question waiting', async () => {
+  const st0 = path.join(dir, '.feature-review', 'state.json');
+  const { term, v } = await viewer({ rows: 60, cols: 130, layout: 'unified', env: { HERDR_PANE_ID: 'w:p1' }, askAgent: async () => ({ name: 'a', pane: 'p', started: false }) });
+  // in the diff: x asks, x again deletes; the answer has no id (asked in the agent's pane)
+  await term.type('/', ...'Why does this check matter', '\r', '\x1b', 'x');
+  assert.match(term.screen().join('\n'), /delete this explanation and its question\? x again/);
+  assert.match(term.screen().join('\n'), /Why does this check matter/, 'not yet');
+  await term.type('x');
+  assert.doesNotMatch(term.screen().join('\n'), /Why does this check matter/);
+  assert.match(term.screen().join('\n'), /explanation deleted/);
+  assert.equal(readState(dir).deleted.length, 1);
+  // the agent's file keeps it; fr does not show it again, also after a reload or in --print
+  assert.match(fs.readFileSync(path.join(dir, '.feature-review', 'annotations.json'), 'utf8'), /Why does this check matter/);
+  await term.type('r');
+  await new Promise((r) => setTimeout(r, 300));
+  assert.doesNotMatch(term.screen().join('\n'), /Why does this check matter/);
+  // in the Questions tab: the general one
+  await term.type('m', '5');
+  assert.match(term.screen().join('\n'), /5 Questions 1/);
+  while (!v.ui.ov.rows[v.ui.ov.cur]?.del) await term.type('j');
+  await term.type('x', 'x');
+  assert.doesNotMatch(term.screen().join('\n'), /How does a refund travel now/);
+  assert.match(term.screen().join('\n'), /No questions yet/);
+  await term.type('m');
+  // a question waiting: x on its ASKED note
+  await term.type('/', ...'amount, idempotencyKey);', '\r', '\x1b', 'A', ...'still there?', '\r');
+  await new Promise((r) => setTimeout(r, 30));
+  await term.type('/', ...'ASKED', '\r', '\x1b', 'x', 'x');
+  assert.doesNotMatch(term.screen().join('\n'), /ASKED|still there\?/);
+  assert.doesNotMatch(term.screen()[0], /waiting/);
+  assert.equal(readState(dir).questions.length, 0);
+  fs.rmSync(st0, { force: true });
+});

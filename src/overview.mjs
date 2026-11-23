@@ -218,20 +218,26 @@ function questions(ctx) {
   const list = Array.isArray(ctx.ann.explanations) ? ctx.ann.explanations : [];
   const rows = [];
   // asked, not answered in the file yet
+  // every row of an entry knows it, so x deletes it from any of them
+  const tag = (from, del) => rows.slice(from).forEach((r) => !r.spacer && (r.del = del));
   ctx.waiting.forEach((q, i) => {
+    const from = rows.length;
     rows.push(...(i ? [spacer()] : []), heading([[' ', ''], [' ASKED ', 'asked'], ['  ', ''], [String(q.question).split('\n')[0].slice(0, ctx.width - 12), 'bold']], ctx.width));
     rows.push({ kind: 'text', segs: [[`  ${q.file ? `about ${q.repo}/${q.file}${q.line != null ? `:${q.side === 'old' ? '-' : '+'}${q.line}` : ''}` : 'about the whole change'} · waiting for the agent's answer`, 'dim']] });
+    tag(from, `asked:${q.id}`);
   });
   if (rows.length) rows.push(spacer(), spacer());
   if (!list.length && rows.length) return rows;
-  if (!list.length) return [{ kind: 'text', segs: [['  No questions yet. A asks the agent about the line under the cursor, or (here) about the whole change.', 'dim']] }];
+  if (!list.length) return [{ kind: 'text', segs: [['  No questions yet. A asks the agent about the line under the cursor, or (here) about the whole change. x deletes one.', 'dim']] }];
   list.forEach((e, i) => {
     if (i) rows.push(spacer(), spacer());
+    const from = rows.length;
     rows.push(heading([[' ', ''], [' EXPLAINED ', 'explain'], ['  ', ''], [String(e?.question ?? '?').split('\n')[0].slice(0, ctx.width - 6), 'bold']], ctx.width));
     const more = String(e?.question ?? '').split('\n').slice(1).join('\n').trim();
     if (more) rows.push(...md(more, ctx.width, 4, 'dim'));
     rows.push(...(e?.ref ? refRows(ctx, e.ref, { label: 'about' }) : [{ kind: 'text', segs: [['  about the whole change', 'dim']] }]));
     if (str(e?.answer)) rows.push(spacer(), ...md(e.answer, ctx.width));
+    tag(from, `explain:${i}`);
   });
   return rows;
 }
