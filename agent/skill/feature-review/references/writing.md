@@ -16,15 +16,17 @@ the reason for a group above its code, the rest in the overview (`m`).
   states the change (not the topic), then the claim as before/after (1 to 4 sentences),
   whether it was requested, the test that shows it or "no test", then the consequence.
 - `ref`: the changed lines that make the difference (`"side": "old"` for removed lines).
-  One finding cites one range; context, precedent and callers go in their own sections
+  A pure rename has no changed line inside the body: cite the declaration line. One
+  finding cites one range; context, precedent and callers go in their own sections
   (`design`, `ghosts`), where they are cited and shown.
 - `kind`: a few words, the badge: `concurrency`, `transaction`, `deleted-check`,
   `error-handling`, `money`, `security`, `untested`, `not-reused`, `design-decision`,
-  `name-vs-behaviour`, `not-traced`, `build-break`, …
+  `name-vs-behaviour`, `not-traced`, `build-break`, `not-requested`, `configuration`, …
+  Use these spellings when they fit, so the same thing has the same badge everywhere.
 - `severity`: the risk levels in SKILL.md.
 - `also`: other changed lines where the same problem shows, as citations (a cause in one
   service, its effect in another: a field made optional, and the consumer that now reads
-  it without a null check). Each is marked in the diff with a pointer to this finding. One finding, not
+  it without a null check; a code change and the configuration line it relies on). Each is marked in the diff with a pointer to this finding. One finding, not
   two that mention each other.
 
 ## A group
@@ -44,7 +46,8 @@ the reason for a group above its code, the rest in the overview (`m`).
 
 **One hunk, two concerns** (a requested change and an unrequested one in the same
 hunk): cite the hunk's line ranges, not the hunk id, and put each range in the group it
-belongs to. Every hunk must be covered, by one group or by ranges in several. `fr check`
+belongs to. A new-side range covers the removed lines inside it too; cite the old side
+only for a hunk that removes lines and adds none. Every hunk must be covered, by one group or by ranges in several. `fr check`
 then warns that the hunk is in several groups: expected here, and the viewer shows it in
 each, marked "also in".
 

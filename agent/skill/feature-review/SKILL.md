@@ -64,7 +64,8 @@ directory, the intent (the issue, or the plan's goal) and any other checkouts to
 for consumers and precedent. Claim it (`atf start <task>`), declare the steps
 (`atf steps <task> "map" "behaviour" "design" "language and tests" "contracts and
 callers" "understanding" "groups" "verify"`) and tick each off as you go. Without ATF, whoever asked
-gives you the same three things.
+gives you the same three things. On a small change (a few hunks), steps 2 to 5 can be
+one reading; declare the steps you will really do.
 
 **No intent, no review.** Without one sentence of what was asked for, `requested`
 cannot be judged: `atf block <task> -m "need the intent: …"` (or ask), and stop.
@@ -123,6 +124,8 @@ folded group shows that it holds one.
 
 Start from what the change can do, then raise **once** if it is not requested, has no
 test, or departs from precedent (several of these: still once), and name which in
-`risk_signals` or the note. `high` is the ceiling. Most groups and findings in a normal
+`risk_signals` or the note. A raise lifts `low` to `medium`, never `medium` to `high`:
+`high` is reached only by what the change can do (the list above), never by a raise. An
+unrequested timeout or replica count is `medium`, not level with a double booking. Most groups and findings in a normal
 change are `medium` or `low`; if nearly everything is `high`, the reviewer cannot tell
 where to start. fr adds its own signals and never lowers yours.

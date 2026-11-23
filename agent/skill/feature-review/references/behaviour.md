@@ -37,6 +37,9 @@ code. Writes: `findings` (at the changed lines), and the `requested` and `risk` 
    mechanical**: every reference renamed, and in Java a public class still matching its
    file name. fr verifies some renames itself, by content only; a hunk fr calls
    mechanical can still deserve a finding.
+10. **Before calling a build break**, look at the base: a mismatch that was already there
+   (a class not matching its file at the base too) is not this change's break; mention it
+   only if the change makes it worse.
 
 Where the order of steps or the failure path changed, show only the path that changed,
 before and after: a short numbered list in the finding's note, or, when it spans

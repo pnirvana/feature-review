@@ -43,13 +43,19 @@ changed). Prose between figures says what to notice.
   same group's parts and the design entries. Never invent an element to make a picture
   tidy.
 - Before you write the figure into the file, look at it once in a monospace view
-  (`fr --print --plain …` after writing): columns that do not line up mislead.
+  (`fr --print --plain …` after writing): columns that do not line up mislead. Check
+  each row with a label between two boxes: that is where they drift. Check each
+  row that carries a label between two boxes; that is where they drift.
 
 ## Where it goes
 
 - `overview`: the change as a whole. On a multi-service change, almost always a figure of
   how the services and the touched types work together, and what is new in that.
 - A group's `why`: the figure for that slice, after the two or three sentences of why.
+  On a change of more than a handful of hunks, the risky groups usually each need one:
+  the overview shows the whole, not the path inside one slice.
+  On a change of more than a handful of hunks, the risky groups usually each need one:
+  the overview shows the whole, not the path inside one slice.
 - A `design` entry's `responsibility`: the type's own structure, when its associations or
   members are the point.
 
