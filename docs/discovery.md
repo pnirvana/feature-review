@@ -232,6 +232,15 @@ Built in this order, each step usable on its own:
    marked. Groups are by service and file until step 2 brings feature groups. Not yet:
    live reload (`r` reloads), feedback key (step 4). Highlighting covers each hunk plus
    20 lines above it, since `bat` is slow on whole files.
+   **Large changes (2026-11-24).** Measured on synthetic features of 10k, 43k and 108k
+   changed lines: moving and scrolling stayed instant, but every fold, mark or hide
+   rebuilt and re-rendered all rows (0.3 s at 43k lines, over 1 s at 108k), and the
+   highlighting of the whole change was kept in memory (about 3 GB at the peak at 108k,
+   near Node's default limit). Now a hunk's rendered code is cached until the width, the
+   layout, its file's highlighting or coverage changes (a fold: about 50 ms at 43k lines,
+   200 ms at 108k), and files are highlighted as they come near the screen, keeping 40,000
+   highlighted lines (the heap: 120 MB at 43k, 350 MB at 108k). `fr --print` still
+   highlights everything.
 2. **An annotation file written by the agent.** The format is defined here; the
    investigation is done by the agent definition on the target machine. It holds:
    - feature groups across services, each with its "why" and risk;

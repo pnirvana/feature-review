@@ -54,13 +54,14 @@ function windows(f, side) {
  * string opened just above a hunk comes out right): bat is slow on whole files. Batched per
  * language and side, the batches run in parallel. → Map fid → {old: [segs] by line - 1,
  * new: [...]} (sparse: lines outside the windows are missing and shown plain).
+ * only: the files to highlight (a Set of fid()); all when null.
  */
-export async function highlightFiles(ws, mode = 'auto') {
+export async function highlightFiles(ws, mode = 'auto', { only = null } = {}) {
   const out = new Map();
   const jobs = [];
   for (const r of ws.repos) {
     if (r.error) continue;
-    for (const f of r.files) if (f.hunks.length) jobs.push(fileTexts(r, f).then((t) => ({ f, t })));
+    for (const f of r.files) if (f.hunks.length && (!only || only.has(fid(f)))) jobs.push(fileTexts(r, f).then((t) => ({ f, t })));
   }
   const texts = await Promise.all(jobs);
   const batches = new Map(); // name → [[{f, side, from, lines}]] (each inner list one bat call)
@@ -347,6 +348,28 @@ const speaker = (c) => (c.layer === 'questions' ? 'questions' : c.source);
 const COVER = { covered: ['●', 'addfg'], partly: ['◐', 'yellow'], missed: ['○', 'delfg bold'] };
 const GUTTER_MARK = 2; // the column for the marks of findings, and a space
 
+// A hunk's code, rendered (codeView: highlighting, wrapping, side by side), is most of the
+// cost of building the rows; it changes only with the width, the layout, the file's
+// highlighting and its coverage, not with folds, marks or notes. Kept per hunk object (a
+// reload makes new ones), for the version of those it was made with.
+const codeCache = new WeakMap();
+const ids = new WeakMap();
+let nextId = 1;
+const idOf = (o) => (o && typeof o === 'object' ? (ids.get(o) ?? (ids.set(o, nextId++), nextId - 1)) : 0);
+function hunkCode(ctx, f, h, layout, cover, cov) {
+  const key = `${ctx.width}|${layout}|${ctx.tint}|${idOf(ctx.hl.get(fid(f)))}|${cover ? idOf(cov) : 0}`;
+  const hit = codeCache.get(h);
+  if (hit?.key === key) return hit;
+  const lines = h.lines.map(([t, s, o, n]) => ({ t, s, old: o, new: n, hunk: h.key }));
+  const rows = codeView({ groups: [{ lines }], name: f.file, width: ctx.width - GUTTER_MARK, layout, tint: ctx.tint, signs: !ctx.tint, segsFor: segsForFile(ctx, f), mark: cover });
+  // side by side? (a finding about a new line then goes under the new side)
+  const split = rows.some((row) => row.segs.some(([t, st]) => t === '│' && st === 'gray'));
+  const nw = Math.max(3, String(Math.max(0, ...h.lines.flatMap(([, , o, n]) => [o ?? 0, n ?? 0]))).length);
+  const out = { key, rows, split, nw };
+  codeCache.set(h, out);
+  return out;
+}
+
 /**
  * A callout: a finding of fr or the agent, under the line it is about. One row with the
  * badge and the text when it fits, else the text below; a bar down the left in the
@@ -461,15 +484,12 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
   const intents = quiet ? [] : notes.filter((n) => n.kind === 'test').flatMap((n) => noteRows(ctx, n, nb));
   if (intents.length) rows.push(...intents.slice(whole.length ? 1 : 0), spacer(nb));
 
-  const lines = h.lines.map(([t, s, o, n]) => ({ t, s, old: o, new: n, hunk: h.key }));
   // coverage (JaCoCo) of an added line: right after its number, apart from the marks of findings
   const cov = ctx.sig.coverage?.get(fid(f));
   const cover = cov && !cov.stale ? (l) => (l.t === '+' && COVER[cov.lines.get(l.new)]) || null : null;
-  const code = codeView({ groups: [{ lines }], name: f.file, width: width - GUTTER_MARK, layout: f.status === 'A' || f.status === 'D' ? 'unified' : layout, tint, signs: !tint, segsFor: segsForFile(ctx, f), mark: cover }).map((x) => ({ ...x, ...base, kind: 'code' }));
-  const nw = Math.max(3, String(Math.max(0, ...h.lines.flatMap(([, , o, n]) => [o ?? 0, n ?? 0]))).length);
+  // (the rows are shared with the cache: copied, with the marks, when placed)
+  const { rows: code, split, nw } = hunkCode(ctx, f, h, f.status === 'A' || f.status === 'D' ? 'unified' : layout, cover, cov);
   const indent = GUTTER_MARK + nw + 1;
-  // side by side, a finding about a new line goes under the new side, beside its line
-  const split = code.some((row) => row.segs.some(([t, st]) => t === '│' && st === 'gray'));
   const half = Math.floor((width - GUTTER_MARK - 1) / 2);
   // (an answer to the reviewer takes the whole width: it can hold a figure)
   const indentOf = (c) => (split && c.side === 'new' && c.layer !== 'questions' ? GUTTER_MARK + half + 1 + nw + 1 : indent);
@@ -502,7 +522,7 @@ function hunkRows(ctx, f, h, base, { note = null } = {}) {
   };
   for (const it of after.get(-1) ?? []) rows.push(...itemRows(it));
   code.forEach((row, i) => {
-    rows.push({ ...row, segs: [...mark(row), ...row.segs] });
+    rows.push({ ...row, ...base, kind: 'code', segs: [...mark(row), ...row.segs] });
     for (const it of after.get(i) ?? []) rows.push(...itemRows(it));
   });
   if (!quiet) for (const n of notes.filter((y) => y.kind !== 'test')) rows.push(...noteRows(ctx, n, nb));

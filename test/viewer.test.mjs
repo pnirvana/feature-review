@@ -76,10 +76,35 @@ async function viewer(opts = {}) {
   fs.rmSync(path.join(dir, '.feature-review', 'state.json'), { force: true });
   const term = fakeTerminal(opts.cols, opts.rows);
   let exited = null;
-  const v = await runViewer({ dir, layout: opts.layout ?? 'auto', feedbackFile: path.join(top, 'feedback.jsonl'), highlight: 'none', queryTheme: false, viMode: opts.viMode ?? false, env: opts.env ?? {}, askAgent: opts.askAgent, input: term.input, output: term.output, exit: (c) => (exited = c) });
+  const v = await runViewer({ dir, layout: opts.layout ?? 'auto', feedbackFile: path.join(top, 'feedback.jsonl'), highlight: opts.highlight ?? 'none', hlBudget: opts.hlBudget, queryTheme: false, viMode: opts.viMode ?? false, env: opts.env ?? {}, askAgent: opts.askAgent, input: term.input, output: term.output, exit: (c) => (exited = c) });
   open.push(v);
   return { term, v, exited: () => exited };
 }
+
+test('highlighting: the files near the screen as they come into view, within a budget of lines', async () => {
+  const settle = async (v) => {
+    for (let i = 0; i < 100 && (v.ui.highlighting || !v.ui.hl.size); i++) await new Promise((r) => setTimeout(r, 20));
+  };
+  const files = (v) => [...new Set(v.ui.rows.map((r) => r.fid).filter(Boolean))];
+  const { term, v } = await viewer({ rows: 12, cols: 130, layout: 'unified', highlight: 'builtin' });
+  await settle(v);
+  const all = files(v);
+  const first = all.find((f) => v.ui.hl.has(f));
+  assert.ok(first, 'a file on screen is highlighted');
+  assert.ok(all.some((f) => !v.ui.hl.has(f)), 'a file far below is not, yet');
+  await term.type('G');
+  await settle(v);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.ok(v.ui.hl.has(all.findLast((f) => v.ui.rows.some((r) => r.fid === f && r.kind === 'code'))), 'the last file, once in view');
+  // within the budget: the files seen longest ago go back to plain
+  const small = await viewer({ rows: 12, cols: 130, layout: 'unified', highlight: 'builtin', hlBudget: 1 });
+  await settle(small.v);
+  const was = [...small.v.ui.hl.keys()];
+  await small.term.type('G');
+  await settle(small.v);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.ok(was.some((f) => !small.v.ui.hl.has(f)), 'a file seen before is let go');
+});
 
 test('keys reach the viewer: ? shows the help, q quits', async () => {
   const { term, exited } = await viewer();

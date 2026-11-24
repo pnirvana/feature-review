@@ -59,7 +59,7 @@ const HELP = [
  * Open the viewer. input and output are the terminal (tests pass a fake one); exit ends
  * the process on q. → {close, ui} once the change is loaded and highlighted.
  */
-export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askHerdrAgent, agentKind = 'pi', agentDefinition = 'feature-review-ask', agentModel = '', agentArgs = [], env = process.env, dir, layout = 'auto', highlight = 'auto', lens = null, input = process.stdin, output = process.stdout, exit = (code) => process.exit(code), queryTheme = true, viMode = false, editor = '' }) {
+export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath(), askAgent = askHerdrAgent, agentKind = 'pi', agentDefinition = 'feature-review-ask', agentModel = '', agentArgs = [], env = process.env, dir, layout = 'auto', highlight = 'auto', lens = null, input = process.stdin, output = process.stdout, exit = (code) => process.exit(code), queryTheme = true, viMode = false, editor = '' }) {
   const out = output;
   const ui = {
     ws: null,
@@ -98,7 +98,9 @@ export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askH
   };
 
   // ---------- data ----------
-  const rowKey = (r) => (r ? [r.kind, r.group ?? '', r.fid ?? r.repo ?? '', r.hunk ?? '', JSON.stringify(r.line ?? null), r.comment ?? '', r.callout ?? ''].join('|') : null);
+  // (built for every row when the view keeps its place: cheap, no JSON)
+  const lineKey = (l) => (l == null ? 'null' : typeof l === 'object' ? `${l.side}${l.n}` : String(l));
+  const rowKey = (r) => (r ? `${r.kind}|${r.group ?? ''}|${r.fid ?? r.repo ?? ''}|${r.hunk ?? ''}|${lineKey(r.line)}|${r.comment ?? ''}|${r.callout ?? ''}` : null);
   const waiting = () => (ui.st ? pendingQuestions(ui.st, ui.ann?.ann) : []);
   // the notes folded (space) that are still in the review
   const foldedNotes = () => ui.rows.filter((r, i) => r.folded && r.callout && ui.rows[i - 1]?.callout !== r.callout).length;
@@ -175,6 +177,7 @@ export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askH
       await loadAnnotations(ws);
       watchAnnotations(ws.root);
       ui.hl = new Map(); // plain until highlighted: old highlighting may not match the new text
+      hlNew();
       ui.ws = ws;
       ui.error = null;
     } catch (e) {
@@ -184,15 +187,54 @@ export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askH
     relayout();
     if (note) flash(note);
     else draw();
-    if (!ws) return;
-    ui.highlighting = true;
-    const hl = await highlightFiles(ws, highlight).catch(() => null);
+  }
+
+  // ---------- highlighting, as the files come into view ----------
+  // Highlighting the whole change at once costs seconds and hundreds of MB on a large one:
+  // fr highlights the files near the screen (a screen above, two below), one job at a time,
+  // and keeps HL_BUDGET highlighted lines, letting go of the ones seen longest ago.
+  const HL_BUDGET = hlBudget; // highlighted lines kept (tests set it low)
+  let hl = null; // {tried, seen, size, tick, job}
+  function hlNew() {
+    hl = { tried: new Set(), seen: new Map(), size: new Map(), tick: 0, job: null };
     ui.highlighting = false;
-    if (hl && ui.ws === ws) {
-      ui.hl = hl;
-      relayout();
-    }
-    draw();
+  }
+  hlNew();
+  function highlightNear() {
+    if (!ui.ws || ui.loading || ui.ov || highlight === 'none') return;
+    const h = H();
+    const near = new Set();
+    for (let i = Math.max(0, ui.top - h); i < Math.min(ui.rows.length, ui.top + 3 * h); i++) if (ui.rows[i]?.fid) near.add(ui.rows[i].fid);
+    hl.tick++;
+    for (const f of near) hl.seen.set(f, hl.tick);
+    const only = new Set([...near].filter((f) => !ui.hl.has(f) && !hl.tried.has(f)));
+    if (!only.size || hl.job) return;
+    for (const f of only) hl.tried.add(f);
+    const ws = ui.ws;
+    const mine = hl;
+    ui.highlighting = true;
+    hl.job = highlightFiles(ws, highlight, { only })
+      .catch(() => null)
+      .then((got) => {
+        mine.job = null;
+        if (hl !== mine || ui.ws !== ws) return;
+        ui.highlighting = false;
+        for (const [f, x] of got ?? []) {
+          ui.hl.set(f, x);
+          hl.size.set(f, x.old.reduce((n) => n + 1, 0) + x.new.reduce((n) => n + 1, 0));
+        }
+        // over the budget: the files seen longest ago go back to plain (highlighted again when back in view)
+        let total = [...hl.size.values()].reduce((a, b) => a + b, 0);
+        for (const f of [...hl.size.keys()].sort((a, b) => (hl.seen.get(a) ?? 0) - (hl.seen.get(b) ?? 0))) {
+          if (total <= HL_BUDGET || hl.seen.get(f) === hl.tick) break;
+          total -= hl.size.get(f);
+          hl.size.delete(f);
+          hl.tried.delete(f);
+          ui.hl.delete(f);
+        }
+        if (got?.size) relayout(); // the same rows, coloured: nothing moves
+        draw();
+      });
   }
   const save = (fn) => {
     try {
@@ -326,6 +368,7 @@ export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askH
     while (lines.length < head.length + bodyH) lines.push([]);
     lines.push(...foot);
     out.write(`${ESC}H` + lines.map((l) => fit(l, w) + `${ESC}K`).join('\r\n') + `${ESC}J`);
+    highlightNear();
   }
 
   /**
@@ -815,17 +858,28 @@ export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askH
     const old = ui.rows;
     const from = { cur: ui.cur, top: ui.top };
     relayout(null);
-    const occ = (rows) => {
-      const n = new Map();
-      return rows.map((r) => {
-        const k = rowKey(r);
-        n.set(k, (n.get(k) ?? 0) + 1);
-        return `${k}#${n.get(k)}`;
-      });
+    // an old row's place in the new rows: the same row (as rowKey sees it), the same
+    // occurrence of it; compared field by field, on the rows asked about only (a large
+    // change has hundreds of thousands)
+    const eq = (a, b) =>
+      a.kind === b.kind && a.group === b.group && (a.fid ?? a.repo) === (b.fid ?? b.repo) && a.hunk === b.hunk && a.comment === b.comment && a.callout === b.callout &&
+      (a.line === b.line || (a.line != null && b.line != null && typeof a.line === 'object' && typeof b.line === 'object' && a.line.side === b.line.side && a.line.n === b.line.n));
+    const memo = new Map();
+    // the notes hidden (a, f) are the rows that go: theirs are not looked for
+    const callouts = new Set(ui.rows.map((r) => r.callout).filter(Boolean));
+    const same = (j) => {
+      if (!nonEmpty(old[j]) || (old[j].callout && !callouts.has(old[j].callout))) return -1;
+      if (memo.has(j)) return memo.get(j);
+      let nth = 0;
+      for (let i = 0; i < j; i++) if (eq(old[i], old[j])) nth++;
+      let found = -1;
+      for (let i = 0, n = 0; i < ui.rows.length; i++) if (eq(ui.rows[i], old[j]) && n++ === nth) {
+        found = i;
+        break;
+      }
+      memo.set(j, found);
+      return found;
     };
-    const at = new Map(occ(ui.rows).map((k, i) => [k, i]));
-    const oldKeys = occ(old);
-    const same = (j) => (nonEmpty(old[j]) ? (at.get(oldKeys[j]) ?? -1) : -1);
     const stays = (j0) => {
       for (let j = j0; j < old.length; j++) if (same(j) >= 0) return same(j);
       for (let j = j0 - 1; j >= 0; j--) if (same(j) >= 0) return same(j);
