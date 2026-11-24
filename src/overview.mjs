@@ -7,7 +7,7 @@
 import { renderBlock } from './md/render.mjs';
 import { parseDoc } from './md/parse.mjs';
 import { codeView } from './md/render.mjs';
-import { pad, restyle } from './md/term.mjs';
+import { pad, plain, restyle } from './md/term.mjs';
 
 export const TABS = [
   { id: 'design', title: 'Design', count: (a) => (Array.isArray(a.design) ? a.design.length : 0) },
@@ -69,14 +69,63 @@ const OWN_BG = /\b(risk\w+|role|fact|explain|asked)\b|(^|[ ;])48;/;
 const heading = (segs, width) => ({ kind: 'item', segs: pad(segs.map((x) => (OWN_BG.test(x[1] ?? '') ? x : restyle([x], 'band')[0])), width, 'band') });
 const empty = (what) => [{ kind: 'text', segs: [[`  The agent wrote no ${what}.`, 'dim']] }];
 
+/**
+ * The reviewer's questions asked on an entry of the overview (A there), and the agent's
+ * answers: under that entry, tinted apart like in the diff. Every row knows its entry
+ * (item) and what x deletes (del).
+ */
+const QA_OWN = /\b(explain|asked|code)\b|48;/;
+function qaRows(ctx, item, list = ctx.qa.get(item) ?? []) {
+  const rows = [];
+  const bar = [['  ', ''], ['▎ ', 'explainbar']];
+  const tint = (segs) => pad([...bar, ...segs.map((x) => (QA_OWN.test(x[1] ?? '') ? x : restyle([x], 'explainband')[0]))], ctx.width, 'explainband');
+  const text = (t, extra) => md(t, ctx.width - 4, 2, extra).map((r) => ({ ...r, segs: tint(r.segs) }));
+  for (const { q, e, i } of list) {
+    const from = rows.length;
+    rows.push(spacer());
+    const question = String(e?.question ?? q.question ?? '');
+    rows.push({ kind: 'item', segs: tint([e ? [' EXPLAINED ', 'explain'] : [' ASKED ', 'asked'], ['  ', ''], ['you asked', 'dim italic']]) });
+    rows.push(...text(question, 'bold'));
+    if (!e) rows.push({ kind: 'text', segs: tint([["  waiting for the agent's answer (in its pane until then)", 'dim italic']]) });
+    else if (str(e.answer)) rows.push({ kind: 'text', segs: tint([]) }, ...text(e.answer));
+    rows.slice(from).forEach((r) => !r.spacer && Object.assign(r, { item, asked: q.id, del: e ? `explain:${i}` : `asked:${q.id}` }));
+  }
+  return rows;
+}
+
+/** A row's text, to find again where a question was asked (the state keeps it as ov.at). */
+export const rowText = (r) => plain(r?.segs ?? []).replace(/\s+/g, ' ').trim();
+
+/**
+ * The rows from `from` on are the entry `item` (A asks about it). Its questions follow the
+ * paragraph (or other block) they were asked on, as in the diff under the line; at the end
+ * of the entry when that text is gone.
+ */
+function entry(ctx, rows, from, item) {
+  for (const r of rows.slice(from)) if (!r.spacer && r.item === undefined) r.item = item;
+  const at = new Map();
+  for (const x of ctx.qa.get(item) ?? []) {
+    let end = rows.length;
+    const i = x.q.ov?.at ? rows.findIndex((r, j) => j >= from && !r.spacer && !r.del && rowText(r) === x.q.ov.at) : -1;
+    if (i >= 0) for (end = i + 1; end < rows.length && !rows[end].spacer; ) end++;
+    at.set(end, [...(at.get(end) ?? []), x]);
+  }
+  for (const end of [...at.keys()].sort((a, b) => b - a)) rows.splice(end, 0, ...qaRows(ctx, item, at.get(end)));
+}
+
 function design(ctx) {
   const list = Array.isArray(ctx.ann.design) ? ctx.ann.design : [];
   const rows = [];
   // how the change works as a whole, then type by type
-  if (str(ctx.ann.overview)) rows.push(heading([[' How it works', 'bold']], ctx.width), spacer(), ...md(ctx.ann.overview, ctx.width), spacer(), spacer());
+  if (str(ctx.ann.overview)) {
+    rows.push(heading([[' How it works', 'bold']], ctx.width), spacer(), ...md(ctx.ann.overview, ctx.width));
+    entry(ctx, rows, 0, 'design:overview');
+    rows.push(spacer(), spacer());
+  }
   if (!list.length) return rows.length ? rows : empty('design notes');
   list.forEach((d, i) => {
     if (i) rows.push(spacer(), spacer());
+    const from = rows.length;
     rows.push(heading([[' ', ''], [String(d.type ?? '?'), 'bold'], ['   ', ''], ...(d.change ? [badge(d.change, 'role'), [' ', '']] : []), ...(d.layer ? [[d.layer, 'dim']] : [])], ctx.width));
     if (d.ref) rows.push(...refRows(ctx, d.ref));
     if (str(d.responsibility)) rows.push(spacer(), ...md(d.responsibility, ctx.width));
@@ -105,6 +154,7 @@ function design(ctx) {
       }
     }
     if (str(d.opinion)) rows.push(spacer(), { kind: 'text', segs: [["  the agent's opinion", 'dim bold']] }, ...md(d.opinion, ctx.width, 4, 'italic'));
+    entry(ctx, rows, from, `design:${d.type ?? i}`);
   });
   return rows;
 }
@@ -120,6 +170,7 @@ function names(ctx) {
   const rows = [];
   order.forEach((n, i) => {
     if (i) rows.push(spacer());
+    const from = rows.length;
     rows.push({
       kind: 'item',
       segs: [
@@ -134,6 +185,7 @@ function names(ctx) {
     if (n?.ref) rows.push(...refRows(ctx, n.ref, { indent: 3 }));
     for (const c of Array.isArray(n?.codebase) ? n.codebase : []) rows.push(...(c?.ref ? refRows(ctx, c.ref, { indent: 3, label: `the codebase calls it ${c?.name ?? '?'}:` }) : []));
     if (str(n?.note)) rows.push(...md(n.note, ctx.width, 3));
+    entry(ctx, rows, from, `names:${n?.name ?? i}`);
   });
   return rows;
 }
@@ -144,6 +196,7 @@ function contracts(ctx) {
   const rows = [];
   list.forEach((c, i) => {
     if (i) rows.push(spacer(), spacer());
+    const from = rows.length;
     rows.push(heading([[' ', ''], [String(c?.name ?? '?'), 'bold'], ['   ', ''], ...(c?.kind ? [[c.kind, 'dim'], ['   ', '']] : []), ['backward compatible ', ''], ...(c?.compatible ? [badge(c.compatible, BADGE[c.compatible] ?? 'riskmedium')] : [])], ctx.width));
     if (c?.producer?.ref) rows.push(...refRows(ctx, c.producer.ref, { label: 'producer' }));
     const fields = Array.isArray(c?.fields) ? c.fields : [];
@@ -167,6 +220,7 @@ function contracts(ctx) {
         if (str(x?.note)) rows.push(...md(x.note, ctx.width, 6));
       }
     }
+    entry(ctx, rows, from, `contracts:${c?.name ?? i}`);
   });
   return rows;
 }
@@ -179,12 +233,15 @@ function rollout(ctx) {
   if (order.length) {
     rows.push(heading([[' deploy in this order   ', 'bold'], ...order.flatMap((n, i) => [...(i ? [['  →  ', 'dim']] : []), [`${i + 1}. ${n}`, 'bold']])], ctx.width));
     if (str(ro.why)) rows.push(spacer(), ...md(ro.why, ctx.width));
+    entry(ctx, rows, 0, 'rollout:order');
   }
   const partial = Array.isArray(ro.partial) ? ro.partial : [];
   if (partial.length) {
     rows.push(spacer(), spacer(), heading([[' while only some services are deployed', 'bold']], ctx.width));
-    for (const p of partial) {
-      rows.push(spacer(), {
+    partial.forEach((p, i) => {
+      rows.push(spacer());
+      const from = rows.length;
+      rows.push({
         kind: 'item',
         segs: [
           ['  ', ''],
@@ -196,24 +253,30 @@ function rollout(ctx) {
         ],
       });
       if (str(p?.effect)) rows.push(...md(p.effect, ctx.width, 4));
-    }
+      entry(ctx, rows, from, `rollout:partial:${i}`);
+    });
   }
   const config = Array.isArray(ro.config) ? ro.config : [];
   if (config.length) {
     rows.push(spacer(), spacer(), heading([[' configuration', 'bold']], ctx.width));
-    for (const c of config) {
+    config.forEach((c, i) => {
       rows.push(spacer());
+      const from = rows.length;
       if (c?.ref) rows.push(...refRows(ctx, c.ref));
       if (str(c?.note)) rows.push(...md(c.note, ctx.width, 4));
-    }
+      entry(ctx, rows, from, `rollout:config:${i}`);
+    });
   }
   return rows.length ? rows : empty('rollout notes');
 }
 
 /**
  * The reviewer's questions and the agent's answers (the ask key), in the order asked: the
- * general ones only here, the ones about a line also under that line in the diff.
+ * general ones only here, the ones about a line also under that line in the diff, the ones
+ * about an entry of the overview also under that entry.
  */
+const askedWhere = (q) =>
+  q?.ov ? `asked in the overview: ${TABS.find((t) => t.id === q.ov.tab)?.title ?? q.ov.tab}${q.ov.title ? ` · ${q.ov.title}` : ''}` : q?.file ? `about ${q.repo}/${q.file}${q.line != null ? `:${q.side === 'old' ? '-' : '+'}${q.line}` : ''}` : 'about the whole change';
 function questions(ctx) {
   const list = Array.isArray(ctx.ann.explanations) ? ctx.ann.explanations : [];
   const rows = [];
@@ -223,7 +286,7 @@ function questions(ctx) {
   ctx.waiting.forEach((q, i) => {
     const from = rows.length;
     rows.push(...(i ? [spacer()] : []), heading([[' ', ''], [' ASKED ', 'asked'], ['  ', ''], [String(q.question).split('\n')[0].slice(0, ctx.width - 12), 'bold']], ctx.width));
-    rows.push({ kind: 'text', segs: [[`  ${q.file ? `about ${q.repo}/${q.file}${q.line != null ? `:${q.side === 'old' ? '-' : '+'}${q.line}` : ''}` : 'about the whole change'} · waiting for the agent's answer`, 'dim']] });
+    rows.push({ kind: 'text', segs: [[`  ${askedWhere(q)} · waiting for the agent's answer`, 'dim']] });
     tag(from, `asked:${q.id}`);
   });
   if (rows.length) rows.push(spacer(), spacer());
@@ -235,7 +298,10 @@ function questions(ctx) {
     rows.push(heading([[' ', ''], [' EXPLAINED ', 'explain'], ['  ', ''], [String(e?.question ?? '?').split('\n')[0].slice(0, ctx.width - 6), 'bold']], ctx.width));
     const more = String(e?.question ?? '').split('\n').slice(1).join('\n').trim();
     if (more) rows.push(...md(more, ctx.width, 4, 'dim'));
-    rows.push(...(e?.ref ? refRows(ctx, e.ref, { label: 'about' }) : [{ kind: 'text', segs: [['  about the whole change', 'dim']] }]));
+    const q = e?.asked ? ctx.byId.get(e.asked) : null;
+    if (q?.ov) rows.push({ kind: 'text', segs: [[`  ${askedWhere(q)}`, 'dim']] });
+    if (e?.ref) rows.push(...refRows(ctx, e.ref, { label: 'about' }));
+    else if (!q?.ov) rows.push({ kind: 'text', segs: [['  about the whole change', 'dim']] });
     if (str(e?.answer)) rows.push(spacer(), ...md(e.answer, ctx.width));
     tag(from, `explain:${i}`);
   });
@@ -246,10 +312,25 @@ function questions(ctx) {
  * One tab's rows. checked: checkAnnotations() plus {ann}; expanded: the refs whose code is
  * shown. Rows: kind 'item' | 'text' | 'ref' (ref, res: a jump target) | 'code' | 'blank'.
  */
-export function overviewRows(checked, tab, { width = 100, expanded = new Set(), waiting = [] } = {}) {
-  const ctx = { ann: checked?.ann ?? {}, refs: checked?.refs ?? new Map(), width, expanded, waiting };
+export function overviewRows(checked, tab, { width = 100, expanded = new Set(), waiting = [], asked = [] } = {}) {
+  const ann = checked?.ann ?? {};
+  // the questions asked on an entry here (state: asked), answered or waiting, by entry
+  const byId = new Map(asked.map((q) => [q.id, q]));
+  const qa = new Map();
+  const add = (item, x) => qa.set(item, [...(qa.get(item) ?? []), x]);
+  (Array.isArray(ann.explanations) ? ann.explanations : []).forEach((e, i) => {
+    const q = e?.asked ? byId.get(e.asked) : null;
+    if (q?.ov?.item) add(q.ov.item, { q, e, i });
+  });
+  for (const q of waiting) if (q.ov?.item) add(q.ov.item, { q });
+  const ctx = { ann, refs: checked?.refs ?? new Map(), width, expanded, waiting, byId, qa };
   const fn = { design, names, contracts, rollout, questions }[tab];
-  return fn ? fn(ctx) : [];
+  if (!fn) return [];
+  const rows = fn(ctx);
+  if (tab === 'questions') return rows;
+  // asked on the tab, not on an entry: at its top
+  const top = qaRows(ctx, `${tab}:`);
+  return top.length ? [...top.slice(1), spacer(), spacer(), ...rows] : rows;
 }
 
 /** The tab bar: each tab with its count, the current one marked. */

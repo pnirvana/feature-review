@@ -378,7 +378,7 @@ test('A asks the agent about the line under the cursor, in the multi-line field;
 
   const asked = [];
   const askAgent = async (q) => (asked.push(q), { name: 'fr-feature', pane: 'w:p2', started: asked.length === 1 });
-  const { term } = await viewer({ rows: 40, cols: 130, layout: 'unified', env: { HERDR_PANE_ID: 'w:p1' }, askAgent });
+  const { term, v } = await viewer({ rows: 40, cols: 130, layout: 'unified', env: { HERDR_PANE_ID: 'w:p1' }, askAgent });
   await term.type('/', ...'amount, idempotencyKey);', '\r', '\x1b', 'A');
   assert.match(term.screen().join('\n'), /ask the agent about gateway\/.*RefundController\.java:\+\d+: .*⏎ send · alt\+⏎ new line/);
   await term.type(...'why the key', '\x1b\r', ...'here?', '\r');
@@ -391,15 +391,77 @@ test('A asks the agent about the line under the cursor, in the multi-line field;
   assert.equal(asked[0].target.line.side, 'new');
   assert.match(asked[0].target.quote, /amount, idempotencyKey\);/);
   assert.match(term.screen().join('\n'), /started fr-feature beside fr and asked it/);
-  // in the overview: no line
-  await term.type('m', 'A', ...'what is risky?', '\r');
+  // in the overview: about the entry under the cursor
+  await term.type('m', '1');
+  while (!/RefundService/.test(plain(v.ui.ov.rows[v.ui.ov.cur].segs))) await term.type('j');
+  await term.type('A');
+  assert.match(term.screen().join('\n'), /ask the agent about Design · RefundService/);
+  await term.type(...'what is risky?', '\r');
   await new Promise((r) => setTimeout(r, 20));
   assert.equal(asked.length, 2);
-  assert.equal(asked[1].target, null);
+  assert.equal(asked[1].target.overview.tab, 'Design');
+  assert.equal(asked[1].target.overview.item, 'design:RefundService');
+  assert.match(asked[1].target.overview.text, /Books a refund/);
   assert.match(term.screen().join('\n'), /asked fr-feature: the answer comes in its pane/);
+  // in the Questions tab: the whole change
+  await term.type('5', 'A', ...'and overall?', '\r');
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(asked[2].target, null);
   // esc: nothing asked
   await term.type('A', 'x', '\x1b');
-  assert.equal(asked.length, 2);
+  assert.equal(asked.length, 3);
+});
+
+test('a question asked on an overview entry: waiting, then answered, under that entry, not in the diff', async () => {
+  const st0 = path.join(dir, '.feature-review', 'state.json');
+  const annFile = path.join(dir, '.feature-review', 'annotations.json');
+  const saved = fs.readFileSync(annFile, 'utf8');
+  const asked = [];
+  const { term, v } = await viewer({ rows: 50, cols: 130, layout: 'unified', env: { HERDR_PANE_ID: 'w:p1' }, askAgent: async (q) => (asked.push(q), { name: 'a', pane: 'p', started: false }) });
+  // on a long entry, a paragraph near its top: the question shows under that paragraph, on screen
+  const small = await viewer({ rows: 16, cols: 130, layout: 'unified', env: { HERDR_PANE_ID: 'w:p1' }, askAgent: async (q) => (asked.push(q), { name: 'a', pane: 'p', started: false }) });
+  await small.term.type('m', '1');
+  while (!/^Books a refund/.test(plain(small.v.ui.ov.rows[small.v.ui.ov.cur].segs).trim())) await small.term.type('j');
+  await small.term.type('A', ...'books twice?', '\r');
+  await new Promise((r) => setTimeout(r, 30));
+  const ov = small.v.ui.ov;
+  const qi = ov.rows.findIndex((r) => /books twice/.test(plain(r.segs)));
+  assert.ok(qi > ov.cur && qi < ov.rows.findIndex((r) => /new dependencies/.test(plain(r.segs))), 'under the paragraph, before the rest of the entry');
+  assert.match(small.term.screen().join('\n'), /ASKED[\s\S]*books twice\?[\s\S]*waiting for the agent/);
+  assert.match(small.term.screen().join('\n'), /▌.*Books a refund/, 'the cursor stays on screen');
+  assert.equal(asked.at(-1).target.overview.at, 'Books a refund and remembers its idempotency key.');
+  fs.rmSync(st0, { force: true });
+  asked.length = 0;
+  await term.type('m', '1');
+  while (!/RefundService/.test(plain(v.ui.ov.rows[v.ui.ov.cur].segs))) await term.type('j');
+  const row = v.ui.ov.cur - v.ui.ov.top;
+  await term.type('A', ...'why a Set?', '\r');
+  await new Promise((r) => setTimeout(r, 30));
+  const scr = () => term.screen().join('\n');
+  assert.match(scr(), /ASKED[\s\S]*why a Set\?[\s\S]*waiting for the agent/);
+  assert.equal(v.ui.ov.cur - v.ui.ov.top, row, 'the cursor stays on its screen row');
+  assert.match(plain(v.ui.ov.rows[v.ui.ov.cur].segs), /RefundService/);
+  // the agent answers, citing code: under the entry, not in the diff
+  const ann = JSON.parse(saved);
+  ann.explanations.push({ asked: asked[0].id, question: 'why a Set?', answer: 'It remembers the keys seen: in memory only.', ref: { repo: 'refund-service', file: 'src/main/java/shop/refund/RefundService.java', lines: '5' } });
+  fs.writeFileSync(annFile, JSON.stringify(ann));
+  for (let i = 0; i < 40 && !/in memory only/.test(scr()); i++) await new Promise((r) => setTimeout(r, 100));
+  assert.match(scr(), /EXPLAINED[\s\S]*why a Set\?[\s\S]*in memory only/);
+  assert.match(scr(), /the agent answered: why a Set\?.*in the overview/);
+  assert.doesNotMatch(scr(), /waiting for the agent/);
+  // the Questions tab says where it was asked
+  await term.type('5');
+  assert.match(scr(), /asked in the overview: Design · RefundService/);
+  // not in the diff
+  await term.type('m');
+  assert.ok(!v.ui.rows.some((r) => /in memory only/.test(plain(r.segs))));
+  // x deletes it under the entry
+  await term.type('m', '1');
+  while (!v.ui.ov.rows[v.ui.ov.cur]?.del) await term.type('j');
+  await term.type('x', 'x');
+  assert.doesNotMatch(scr(), /in memory only/);
+  fs.writeFileSync(annFile, saved);
+  fs.rmSync(st0, { force: true });
 });
 
 test('the cursor is written for the agent ("this line"), a moment after it stops', async () => {

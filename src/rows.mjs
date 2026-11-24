@@ -186,6 +186,11 @@ function context(ws, st, opts) {
   const byId = new Map((st.questions ?? []).map((q) => [q.id, q]));
   for (const [u, list] of [...byUnit]) {
     for (const c of list.filter((x) => x.asked && byId.has(x.asked))) {
+      // asked in the overview: it shows there, under the entry asked about, not in the diff
+      if (byId.get(c.asked).ov) {
+        byUnit.set(u, byUnit.get(u).filter((x) => x !== c));
+        continue;
+      }
       const at = askedAt(byId.get(c.asked));
       if (!at) continue;
       c.place = { side: at.side, line: at.line };

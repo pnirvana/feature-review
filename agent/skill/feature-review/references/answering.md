@@ -12,8 +12,12 @@ Each question comes as a prompt from fr:
 
 - `Where:` the place the reviewer stood when asking: a repository, file and line (`+12`
   the new side, `-9` a removed line, at the base), its hunk and group, the line's text,
-  or the note under the cursor. "This", "here" and "this line" mean that place. No place
-  (asked from the overview): the question is about the change as a whole.
+  or the note under the cursor. "This", "here" and "this line" mean that place. In fr's
+  overview, the place is a tab and the entry under the cursor (a design note, a name, a
+  contract, a rollout step) with its text as the reviewer reads it: "this" means that
+  entry. fr shows the answer under that entry; a `ref` is still welcome when the answer is
+  about particular code. No place (asked from the Questions tab): the question is about
+  the change as a whole.
 - A question typed straight into your pane names no place: read
   `.feature-review/cursor.json` for where the reviewer's cursor is now.
 

@@ -12,7 +12,7 @@ import { buildRows, highlightFiles, fid, unitsOf, readingOrder, groupFoldId, UNG
 const LAYER_NAMES = { agent: 'agent', fr: 'fr', coverage: 'coverage', comments: 'comments', questions: 'questions' };
 import { annotationsPath, readAnnotations, checkAnnotations } from './annotations.mjs';
 import { queryColors, applyTheme } from './ui/theme.mjs';
-import { overviewRows, tabBar, TABS } from './overview.mjs';
+import { overviewRows, tabBar, TABS, rowText } from './overview.mjs';
 import { ESC, fit, plain, charWidth, strWidth, segsWidth, hasBg } from './md/term.mjs';
 import { feedbackPath, recordFeedback, aboutRow } from './feedback.mjs';
 import { textField, keyField, fieldText, fieldRows, fieldMode } from './ui/textfield.mjs';
@@ -159,8 +159,8 @@ export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askH
           if (q.hunk) ui.fold.set(q.hunk, false); // in a folded block: open it
         }
       });
-      if (ui.ov) ui.ann ? ovLayout() : (ui.ov = null);
-      if (answered.length && !ui.annError) return flash(`the agent answered: ${answered[0].question.split('\n')[0].slice(0, 60)}${answered.length > 1 ? ` (+${answered.length - 1})` : ''}   ${answered[0].line != null ? 'under its line' : 'm, Questions'}`, 'markexplain');
+      if (ui.ov) ui.ann ? (ovKeep(ovLayout), answered.length && ovShow(answered[0].id)) : (ui.ov = null);
+      if (answered.length && !ui.annError) return flash(`the agent answered: ${answered[0].question.split('\n')[0].slice(0, 60)}${answered.length > 1 ? ` (+${answered.length - 1})` : ''}   ${answered[0].ov ? 'in the overview, under what you asked about' : answered[0].line != null ? 'under its line' : 'm, Questions'}`, 'markexplain');
       flash(ui.annError ? `annotations: ${ui.annError}` : ui.ann ? 'annotations reloaded' : 'annotations removed', ui.annError ? 'red' : 'green');
     });
   }
@@ -305,10 +305,11 @@ export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askH
     else if (!ui.ws) body = [[[' reading the worktrees…', 'dim']]];
     else if (ui.ov) {
       const o = ui.ov;
+      const n = Math.max(1, bodyH - 1); // the rows shown, under a blank one
       if (o.cur < o.top) o.top = o.cur;
-      if (o.cur >= o.top + bodyH) o.top = o.cur - bodyH + 1;
-      o.top = Math.max(0, Math.min(o.top, Math.max(0, o.rows.length - bodyH)));
-      body = [[], ...o.rows.slice(o.top, o.top + bodyH - 1).map((r, i) => [...(o.top + i === o.cur ? [['▌', 'cyan bold']] : [[' ', '']]), [' ', ''], ...r.segs])];
+      if (o.cur >= o.top + n) o.top = o.cur - n + 1;
+      o.top = Math.max(0, Math.min(o.top, Math.max(0, o.rows.length - n)));
+      body = [[], ...o.rows.slice(o.top, o.top + n).map((r, i) => [...(o.top + i === o.cur ? [['▌', 'cyan bold']] : [[' ', '']]), [' ', ''], ...r.segs])];
     } else {
       if (ui.cur < ui.top) ui.top = ui.cur;
       if (ui.cur >= ui.top + bodyH) ui.top = ui.cur - bodyH + 1;
@@ -445,8 +446,50 @@ export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askH
   // ---------- the overview ----------
   function ovLayout() {
     const o = ui.ov;
-    o.rows = overviewRows(ui.ann, o.tab, { width: Math.max(30, W() - 3), expanded: o.expanded, waiting: waiting() });
+    o.rows = overviewRows(ui.ann, o.tab, { width: Math.max(30, W() - 3), expanded: o.expanded, waiting: waiting(), asked: ui.st?.questions ?? [] });
     o.cur = Math.max(0, Math.min(o.cur, o.rows.length - 1));
+  }
+  /**
+   * Changes the overview (a question added, answered, deleted) with the row under the cursor
+   * kept at its screen row: answers appear under their entry, also above the cursor.
+   */
+  function ovKeep(change) {
+    const o = ui.ov;
+    const r = o.rows[o.cur];
+    const same = r?.del ? (x) => x.del === r.del : r?.item ? (x) => x.item === r.item && !x.del : null;
+    const k = same ? o.rows.slice(0, o.cur).filter(same).length : 0;
+    const screen = o.cur - o.top;
+    change();
+    if (!same || !ui.ov) return;
+    const at = ui.ov.rows.map((x, i) => (same(x) ? i : -1)).filter((i) => i >= 0);
+    if (!at.length) return;
+    ui.ov.cur = at[Math.min(k, at.length - 1)];
+    ui.ov.top = Math.max(0, ui.ov.cur - screen);
+  }
+  /** What A in the overview asks about: the entry under the cursor (else the tab); none in the Questions tab. */
+  function ovTarget() {
+    const o = ui.ov;
+    if (o.tab === 'questions') return null;
+    const tab = TABS.find((t) => t.id === o.tab)?.title ?? o.tab;
+    const r = o.rows[o.cur];
+    const item = r?.item ?? `${o.tab}:`;
+    if (item.endsWith(':')) return { overview: { tab, item, title: null, text: null, at: null } };
+    const own = o.rows.filter((x) => x.item === item && !x.del);
+    const title = rowText(own[0]).slice(0, 80);
+    const text = own.map((x) => plain(x.segs).trimEnd()).filter(Boolean).join('\n').slice(0, 2000);
+    // the row asked on (on an answer: the entry's end), for the question to show under it
+    const at = r && !r.del ? rowText(r) || null : null;
+    return { overview: { tab, item, title, text, at } };
+  }
+  /** Scrolls the overview so the question `id` (asked, or its answer) shows, as far as it fits, the cursor kept on screen. */
+  function ovShow(id) {
+    const o = ui.ov;
+    const idx = o?.rows.map((r, i) => (r.asked === id ? i : -1)).filter((i) => i >= 0) ?? [];
+    if (!idx.length) return;
+    const vis = Math.max(1, H() - 4);
+    const last = Math.min(idx.at(-1), idx[0] + vis - 1);
+    if (last >= o.top + vis) o.top = Math.min(o.cur, last - vis + 1);
+    if (idx[0] < o.top) o.top = Math.max(idx[0], o.cur - vis + 1, 0);
   }
   function openOverview() {
     if (!ui.ann) return flash(ui.annError ? `annotations: ${ui.annError}` : `no annotations: the agent writes them to ${annotationsPath(ui.ws.root)}`, 'yellow');
@@ -906,7 +949,7 @@ export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askH
       if (!save((st) => (e ? deleteExplanation(st, e) : deleteQuestion(st, id)))) return;
       if (e) ui.ann.ann.explanations = ui.ann.ann.explanations.filter((x) => x !== e);
     };
-    if (ui.ov) change(), relayout(), ovLayout(), ovMove(0), draw();
+    if (ui.ov) ovKeep(() => (change(), relayout(), ovLayout())), ovMove(0), draw();
     else keepInPlace(at(), change);
     flash(e ? 'explanation deleted' : 'question deleted');
   }
@@ -919,8 +962,9 @@ export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askH
    */
   function startAsk() {
     if (!inHerdr(env)) return flash('A needs herdr: run fr in a herdr pane, and the agent opens beside it', 'yellow');
-    const target = ui.ov ? { tab: ui.ov.tab } : feedbackTarget();
-    const place = ui.ov ? 'the whole change' : target?.repo && target?.file ? `${target.repo}/${target.file}${target.line ? `:${target.line.side === 'old' ? '-' : '+'}${target.line.n}` : ''}` : target?.group ? `group ${target.group}` : 'the whole change';
+    const target = ui.ov ? ovTarget() : feedbackTarget();
+    const ovAt = target?.overview;
+    const place = ui.ov ? (ovAt ? `${ovAt.tab}${ovAt.title ? ` · ${ovAt.title.slice(0, 40)}` : ''}` : 'the whole change') : target?.repo && target?.file ? `${target.repo}/${target.file}${target.line ? `:${target.line.side === 'old' ? '-' : '+'}${target.line.n}` : ''}` : target?.group ? `group ${target.group}` : 'the whole change';
     ask({
       label: `ask the agent about ${place}: `,
       verb: 'send',
@@ -928,15 +972,15 @@ export async function runViewer({ feedbackFile = feedbackPath(), askAgent = askH
         if (!text.trim()) return flash('nothing asked', 'dim');
         flash('asking the agent…', 'dim');
         const id = `q-${crypto.randomBytes(3).toString('hex')}`;
-        const about = ui.ov ? null : target;
+        const about = target;
         askAgent({ root: ui.ws.root, question: text, target: about, id, env, kind: agentKind, definition: agentDefinition || null, model: agentModel || null, args: agentArgs }).then(
           (r) => {
             // kept in the review state: it shows, waiting, until the answer is in the file
-            const at = about ? { repo: about.repo ?? null, file: about.file ?? null, side: about.line?.side ?? null, line: about.line?.n ?? null, quote: about.quote ?? null, hunk: about.hunk ?? null, group: about.group ?? null } : {};
+            const at = ovAt ? { ov: { tab: ovAt.item.split(':')[0], item: ovAt.item, title: ovAt.title, at: ovAt.at } } : about ? { repo: about.repo ?? null, file: about.file ?? null, side: about.line?.side ?? null, line: about.line?.n ?? null, quote: about.quote ?? null, hunk: about.hunk ?? null, group: about.group ?? null } : {};
             // it shows at once, waiting, even where the notes are hidden
             ui.reveal.add(id);
             if (save((st) => addQuestion(st, id, at, text.trim()))) {
-              if (ui.ov) relayout(), ovLayout();
+              if (ui.ov) ovKeep(() => (relayout(), ovLayout())), ovShow(id);
               else keepInPlace(ui.cur, () => {});
             }
             const runs = [r.definition, r.model ? `model ${r.model}` : r.kind === 'pi' ? "Pi's default model" : null].filter(Boolean).join(', ');

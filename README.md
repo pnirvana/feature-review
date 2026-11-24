@@ -37,8 +37,10 @@ the Agent Skills format, so harnesses other than Pi can load it too.
 
 ## Asking while you review
 
-`A` asks an agent about the line under the cursor (in the overview: about the whole
-change). The question is written in the same multi-line field as a comment; fr sends it
+`A` asks an agent about the line under the cursor. In the overview it asks about the
+entry under the cursor (a design note, a name, a contract, a rollout step, or the tab
+itself), and the answer shows under that entry; in the Questions tab, about the whole
+change. The question is written in the same multi-line field as a comment; fr sends it
 with the place (repository, file, line, hunk, group, the line's text or the note under
 the cursor) to an agent in a herdr pane beside fr. The first question opens that pane and
 starts the agent there (`agent.kind`, Pi by default) as the agent definition
@@ -187,7 +189,7 @@ explain what fr has verified.
 | `space` `z` `Z` | fold the hunk (on a note: the note, to one line, counted in the header) · the file or group · all of them |
 | `c` · `e` · `x` | comment on the line (on a file line: the file) · edit · delete (`x` on an answer or a waiting question: delete it, twice) |
 | `o` | open the line in `$EDITOR` |
-| `A` | ask the agent beside fr about the line under the cursor (in the overview: the whole change); see "Asking while you review" |
+| `A` | ask the agent beside fr about the line under the cursor (in the overview: the entry under it; in the Questions tab: the whole change); see "Asking while you review" |
 | `!` | feedback on what is under the cursor: `h` helped · `m` missing here · `w` wrong, then an optional note |
 | `s` · `r` · `/` · `?` · `q` | side by side ↔ inline · reload · search as you type (⏎ keeps the match, esc goes back) · help · quit |
 

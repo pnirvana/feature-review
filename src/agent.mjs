@@ -104,6 +104,12 @@ export async function startAgent({ root, herdr, env = process.env, kind = 'pi', 
 /** Where the reviewer is, in words, for the prompt: from feedbackTarget() in the viewer. */
 export function placeText(t) {
   if (!t) return 'about the whole change';
+  if (t.overview) {
+    const o = t.overview;
+    const at = `in fr's overview, tab ${o.tab}${o.title ? `, on the entry: ${o.title}` : ' (on the tab as a whole)'}`;
+    const row = o.at && o.at !== o.title ? `\nthe row under the cursor ("this"): ${o.at}` : '';
+    return `${at}${row}${o.text ? `\nwhat the reviewer reads there:\n${o.text}` : ''}`;
+  }
   const lines = [];
   if (t.repo && t.file) lines.push(`at ${t.repo}/${t.file}${t.line ? `:${t.line.side === 'old' ? '-' : '+'}${t.line.n} (${t.line.side === 'old' ? 'a removed line, at the base' : 'the new side'})` : ''}`);
   else if (t.repo) lines.push(`in ${t.repo}`);
@@ -117,7 +123,8 @@ export function placeText(t) {
 
 /** The prompt for one question; the first one also says who the agent is and what to read. */
 export function questionPrompt({ root, question, target, first, id = null }) {
-  const where = target ? placeText(target) : 'about the whole change (asked from the overview)';
+  const where = target ? placeText(target) : 'about the whole change (asked from the overview, Questions tab)';
+  const shows = target?.overview ? 'in the overview, under what they asked about' : target?.line ? 'under the line' : "in the overview's Questions tab";
   const intro = first
     ? [
         `[fr] You answer the questions of a human reviewing the feature in ${root} with fr (feature review).`,
@@ -130,7 +137,7 @@ export function questionPrompt({ root, question, target, first, id = null }) {
   const keep = id
     ? [
         '',
-        `Answer in your pane, and always add the answer to \`explanations\` in ${path.join(root, '.feature-review', 'annotations.json')}, with "asked": "${id}", the question word for word${target?.line ? ', and a ref to the lines it is about' : ''}: the reviewer reads it there, under the line, and their question shows as waiting until it is.`,
+        `Answer in your pane, and always add the answer to \`explanations\` in ${path.join(root, '.feature-review', 'annotations.json')}, with "asked": "${id}", the question word for word${target?.line ? ', and a ref to the lines it is about' : ''}: the reviewer reads it there (fr shows it ${shows}), and their question shows as waiting until it is.`,
       ]
     : [];
   return [...intro, `Where: ${where}`, '', 'Question:', question.trim(), ...keep].join('\n');

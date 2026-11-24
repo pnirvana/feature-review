@@ -281,8 +281,9 @@ Built in this order, each step usable on its own:
    `A` opens the multi-line field; fr sends the question, with where the reviewer is, to
    an agent in a herdr pane beside fr (`src/agent.mjs`, `herdr agent prompt`), starting
    it on the first question. The answer comes in the agent's pane; answers worth keeping
-   go into a new section, `explanations`, shown under their line (EXPLAINED) and in the
-   overview's Questions tab, hidden with `f` `5`. Decided:
+   go into a new section, `explanations`, shown under their line (EXPLAINED), or under
+   the overview entry they were asked on, and in the overview's Questions tab, hidden
+   with `f` `5`. Decided:
    - **The chat stays in the agent's pane**, not in fr: the agent already has a chat
      interface, and fr stays without a model and without dependencies. Any agent herdr
      knows works (`agent.kind`).
