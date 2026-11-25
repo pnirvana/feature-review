@@ -162,10 +162,14 @@ function proseQa(ctx, rows, { group = undefined, head = [], width = ctx.width } 
   const put = (end, x) => (at.set(end, [...(at.get(end) ?? []), x]), ctx.prosePlaced.add(x.q.id));
   const lead = rows.findIndex((r) => !r.spacer);
   for (const x of todo) {
-    const i = rows.findIndex((r) => !r.spacer && !r.callout && r.kind !== 'code' && proseText(r) === x.q.prose);
+    // (not on a question's own rows)
+    const own = (r) => /^(asked|explain):/.test(r.callout ?? '');
+    const i = rows.findIndex((r) => !r.spacer && !own(r) && r.kind !== 'code' && proseText(r) === x.q.prose);
     if (i >= 0) {
       let end = i + 1;
-      while (end < rows.length && !rows[end].spacer && !rows[end].callout && rows[end].kind !== 'code' && rows[end].src === rows[i].src && proseText(rows[end])) end++;
+      // a note (a test intent, a ghost): after all of it; other text: after its paragraph
+      if (rows[i].callout) while (end < rows.length && rows[end].callout === rows[i].callout && !rows[end].gap) end++;
+      else while (end < rows.length && !rows[end].spacer && !rows[end].callout && rows[end].kind !== 'code' && rows[end].src === rows[i].src && proseText(rows[end])) end++;
       put(end, x);
     } else if (group !== undefined && (head.some((r) => proseText(r) === x.q.prose) || x.q.group === group)) put(Math.max(0, lead), x);
   }
@@ -243,19 +247,43 @@ function context(ws, st, opts) {
     const c = { key: `asked:${q.id}`, asked: q.id, source: 'agent', layer: 'questions', pending: true, about: 'asked', level: 'info', label: 'ASKED', question: q.question, text: "waiting for the agent's answer (in its pane until then)", md: false, side: loc.side, from: loc.line, to: loc.line };
     byUnit.set(h.key, [...(byUnit.get(h.key) ?? []), c]);
   }
+  // a question and its answer as a note (EXPLAINED), or the question waiting (ASKED)
+  const explained = Array.isArray(opts.ann?.ann?.explanations) ? opts.ann.ann.explanations : [];
+  const qaCallout = (q) => {
+    const i = explained.findIndex((e) => e?.asked && String(e.asked) === q.id);
+    const e = explained[i];
+    return e
+      ? { key: `explain:${i}`, src: e, source: 'agent', layer: 'questions', about: 'agent:explanation', level: 'info', label: 'EXPLAINED', asked: q.id, question: String(e.question ?? q.question ?? '').trim(), text: e.answer ?? '', md: true }
+      : { key: `asked:${q.id}`, asked: q.id, source: 'agent', layer: 'questions', pending: true, about: 'asked', level: 'info', label: 'ASKED', question: q.question, text: "waiting for the agent's answer (in its pane until then)", md: false };
+  };
+  // asked on a note in the diff (a finding, an answer, fr's note): right under that note
+  const noteUnit = new Map();
+  for (const [u, list] of byUnit) for (const c of list) noteUnit.set(c.key, u);
+  const underNote = new Set();
+  for (const q of st.questions ?? []) {
+    if (!q.callout || q.ov || q.line != null || !noteUnit.has(q.callout)) continue;
+    // its answer, wherever its citation put it: here instead
+    let c = null;
+    for (const [k, list] of byUnit) {
+      const i = list.findIndex((x) => x.asked === q.id);
+      if (i >= 0) (c = list[i]), byUnit.set(k, list.filter((_, j) => j !== i));
+    }
+    c ??= qaCallout(q);
+    const list = byUnit.get(noteUnit.get(q.callout));
+    let at = list.findIndex((x) => x.key === q.callout);
+    const note = list[at];
+    // after the questions already under it
+    while (list[at + 1]?.under === q.callout) at++;
+    list.splice(at + 1, 0, { ...c, side: note.side, from: note.from, to: note.to, ...(note.place ? { place: note.place } : {}), under: q.callout });
+    underNote.add(q.id);
+  }
   // asked on text, not on a line of code (a group's header or why, a part's note, the intent,
   // a note under a hunk): under the paragraph asked on, it and its answer (proseQa)
   const prose = new Map();
-  const explained = Array.isArray(opts.ann?.ann?.explanations) ? opts.ann.ann.explanations : [];
   for (const q of st.questions ?? []) {
     // (asked before fr kept the text: a group's go first in it)
-    if ((!q.prose && !(q.group && !q.file && !q.hunk)) || q.line != null || q.ov) continue;
-    const i = explained.findIndex((e) => e?.asked && String(e.asked) === q.id);
-    const e = explained[i];
-    const c = e
-      ? { key: `explain:${i}`, src: e, source: 'agent', layer: 'questions', about: 'agent:explanation', level: 'info', label: 'EXPLAINED', asked: q.id, question: String(e.question ?? q.question ?? '').trim(), text: e.answer ?? '', md: true }
-      : { key: `asked:${q.id}`, asked: q.id, source: 'agent', layer: 'questions', pending: true, about: 'asked', level: 'info', label: 'ASKED', question: q.question, text: "waiting for the agent's answer (in its pane until then)", md: false };
-    prose.set(q.id, { q, c });
+    if (underNote.has(q.id) || (!q.prose && !(q.group && !q.file && !q.hunk)) || q.line != null || q.ov) continue;
+    prose.set(q.id, { q, c: qaCallout(q) });
   }
   // its answer shows there, not under a line it cites
   for (const [u, list] of [...byUnit]) if (list.some((c) => c.asked && prose.has(c.asked))) byUnit.set(u, list.filter((c) => !(c.asked && prose.has(c.asked))));

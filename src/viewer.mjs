@@ -1063,17 +1063,23 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
         const id = `q-${crypto.randomBytes(3).toString('hex')}`;
         const about = target;
         // asked on text, not on a line of code: the row's text, to show it under that paragraph
-        const r = !ui.ov && !target?.line ? ui.rows[ui.cur] : null;
-        const prose = r && !r.spacer && r.kind !== 'code' ? proseText(r) || null : null;
+        const row = !ui.ov && !target?.line ? ui.rows[ui.cur] : null;
+        const prose = row && !row.spacer && row.kind !== 'code' ? proseText(row) || null : null;
+        const note = row?.callout ?? null;
         askAgent({ root: ui.ws.root, question: text, target: about, id, env, kind: agentKind, definition: agentDefinition || null, model: agentModel || null, args: agentArgs }).then(
           (r) => {
             // kept in the review state: it shows, waiting, until the answer is in the file
-            const at = ovAt ? { ov: { tab: ovAt.item.split(':')[0], item: ovAt.item, title: ovAt.title, at: ovAt.at } } : about ? { repo: about.repo ?? null, file: about.file ?? null, side: about.line?.side ?? null, line: about.line?.n ?? null, quote: about.quote ?? null, hunk: about.hunk ?? null, group: about.group ?? null, ...(prose ? { prose } : {}) } : {};
+            const at = ovAt ? { ov: { tab: ovAt.item.split(':')[0], item: ovAt.item, title: ovAt.title, at: ovAt.at } } : about ? { repo: about.repo ?? null, file: about.file ?? null, side: about.line?.side ?? null, line: about.line?.n ?? null, quote: about.quote ?? null, hunk: about.hunk ?? null, group: about.group ?? null, ...(prose ? { prose } : {}), ...(note ? { callout: note } : {}) } : {};
             // it shows at once, waiting, even where the notes are hidden
             ui.reveal.add(id);
             if (save((st) => addQuestion(st, id, at, text.trim()))) {
               if (ui.ov) ovKeep(() => (relayout(), ovLayout())), ovShow(id);
-              else keepInPlace(ui.cur, () => {});
+              else {
+                keepInPlace(ui.cur, () => {});
+                // the question, waiting, on screen (as far as it fits, the cursor kept)
+                showRows((x) => x.callout === `asked:${id}`);
+                draw();
+              }
             }
             const runs = [r.definition, r.model ? `model ${r.model}` : r.kind === 'pi' ? "Pi's default model" : null].filter(Boolean).join(', ');
             flash(`${r.started ? `started ${r.name}${runs ? ` (${runs})` : ''} beside fr and asked it` : `asked ${r.name}`}: the answer comes in its pane, then here`);

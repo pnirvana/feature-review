@@ -529,6 +529,47 @@ test('a question asked on a group\'s text: waiting, then answered, under that pa
   fs.rmSync(st0, { force: true });
 });
 
+test('a question asked on a note in the diff (a finding): right under it, on screen; its answer too, whatever it cites', async () => {
+  const st0 = path.join(dir, '.feature-review', 'state.json');
+  const annFile = path.join(dir, '.feature-review', 'annotations.json');
+  const saved = fs.readFileSync(annFile, 'utf8');
+  const asked = [];
+  for (const lens of ['groups', 'services']) {
+    asked.length = 0;
+    const { term, v } = await viewer({ rows: 30, cols: 130, layout: 'unified', env: { HERDR_PANE_ID: 'w:p1' }, askAgent: async (q) => (asked.push(q), { name: 'a', pane: 'p', started: false }) });
+    if (lens === 'services') await term.type('\t');
+    await term.type('/', ...'nothing else rejects', '\r', '\x1b');
+    const note = v.ui.rows[v.ui.cur].callout;
+    assert.match(note, /^finding:/);
+    await term.type('A', ...'is that so?', '\r');
+    await new Promise((r) => setTimeout(r, 30));
+    const scr = () => term.screen().join('\n');
+    // right after the finding's rows
+    const i = v.ui.rows.findIndex((r) => r.callout === `asked:${asked[0].id}`);
+    const last = v.ui.rows.findLastIndex((r) => r.callout === note);
+    assert.ok(i > last && v.ui.rows.slice(last + 1, i).every((r) => r.gap || !r.segs.length || r.callout === undefined), `${lens}: under the finding`);
+    assert.match(scr(), /nothing else rejects a negative refund[\s\S]*ASKED[\s\S]*is that so\?/, `${lens}: on screen`);
+    // the answer cites another line: still under the finding
+    const ann = JSON.parse(saved);
+    ann.explanations.push({ asked: asked[0].id, question: 'is that so?', answer: 'Yes: no validator downstream.', ref: { repo: 'refund-service', file: 'src/main/java/shop/refund/RefundService.java', lines: '5' } });
+    fs.writeFileSync(annFile, JSON.stringify(ann));
+    for (let k = 0; k < 40 && !v.ui.rows.some((r) => /no validator downstream/.test(plain(r.segs))); k++) await new Promise((r) => setTimeout(r, 100));
+    const a = v.ui.rows.findIndex((r) => /no validator downstream/.test(plain(r.segs)));
+    assert.ok(a > v.ui.rows.findLastIndex((r) => r.callout === note) && v.ui.rows[a].hunk === v.ui.rows.find((r) => r.callout === note).hunk, `${lens}: the answer under the finding`);
+    assert.equal(v.ui.rows.filter((r) => /no validator downstream/.test(plain(r.segs))).length, 1);
+    // on a note that is no finding (a test's intent): after that note
+    await term.type('/', ...'any number of times', '\r', '\x1b');
+    const t = v.ui.cur;
+    await term.type('A', ...'and the intent?', '\r');
+    await new Promise((r) => setTimeout(r, 30));
+    const q = v.ui.rows.findIndex((r) => r.callout === `asked:${asked[1].id}`);
+    assert.ok(q > t && v.ui.rows.slice(t, q).every((r) => r.hunk === v.ui.rows[t].hunk), `${lens}: under the test's note, in its hunk`);
+    fs.writeFileSync(annFile, saved);
+    fs.rmSync(st0, { force: true });
+    await new Promise((r) => setTimeout(r, 300));
+  }
+});
+
 test('p on a link to another part of the review: that part in the pane; ⏎ goes there, gt comes back', async () => {
   const annFile = path.join(dir, '.feature-review', 'annotations.json');
   const saved = fs.readFileSync(annFile, 'utf8');
