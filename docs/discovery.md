@@ -362,6 +362,15 @@ place (collected while reading, answered in one go).
   their declaration with `git grep` (marked as found by name). Rejected: expanding inline
   as the main way (grows with every citation), jumping (loses the place), the editor
   alone (another tool; kept as `o` from the peek).
+- **Links between parts of the review** (2026-11-25): notes refer to other findings,
+  groups and entries ("see the check-then-act finding on `RefundService`"), and only
+  groups had ids. Decided: Markdown links to anchors (`#finding:<id>`, `#group:<id>`,
+  `#design:<type>`, `#name:<name>`, `#contract:<name>`; findings gain an optional `id`;
+  hunk ids as they stand), resolved by `fr check`, which also warns about references in
+  words only, so the preparing agent fixes them in its loop. The same `p`: a link is a
+  place in the peek's list, shown as the review shows that part, `⏎` goes there, `gt`
+  back. Rejected: matching a description to a finding by its wording (right sometimes,
+  wrong without a sign the other times).
 - **Glossary:** the code is the single source of truth. The names list (§8) compares
   names against what the existing code already calls the same thing. Whether a
   maintained glossary is worth it is undecided; if so, it is a separate project.

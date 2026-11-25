@@ -236,6 +236,15 @@ the cited lines (the review's stays marked, dim); the footer says where it is.
 | `o` | open the cursor's line in `$EDITOR` (code at the base: a read-only copy) |
 | `esc` `p` | close it: you are where you were |
 
+A note's text can also point at another part of the review: a finding, a group, a
+design entry, a name or a contract, as a link the agent writes
+(`[the check-then-act finding](#finding:check-then-act)`, shown as its text), or a hunk
+id (`gateway:H3`). These join the same list: the pane shows that part as the review does
+(a finding with its code, a group with its why and parts, an overview entry), and `⏎`
+goes there, into the overview for an entry of it; `gt` comes back. A link that points
+nowhere says so; `fr check` reports it, and warns where a note refers to another part in
+words only.
+
 ### Feedback: does fr earn its place?
 
 `!` records, at the cursor, that what is there **helped**, that something is **missing**

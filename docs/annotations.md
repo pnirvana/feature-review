@@ -58,6 +58,28 @@ keys. `fr hunks` lists the hunks with short ids (`shop:H3`) and line ranges, so 
 agent can cite `{"hunk": "shop:H3"}` too; the tool resolves both forms to the stable
 keys when the file is checked.
 
+## Linking to another part of the review
+
+Text that refers to another part of the review links to it, as a Markdown link to an
+anchor (the reader sees the link's text; `p` on it shows that part, `⏎` there goes to
+it):
+
+```markdown
+Retried, it books twice: see [the check-then-act finding](#finding:check-then-act).
+```
+
+| anchor | the part | its key |
+|---|---|---|
+| `#finding:<id>` | a finding | its `id` (give the finding one) |
+| `#group:<id>` | a group | its `id` |
+| `#design:<type>` | a design entry | its `type` |
+| `#name:<name>` | an entry of the names list | its `name` |
+| `#contract:<name>` | a contract | its `name` |
+
+A hunk id as `fr hunks` prints it (`shop:H3`) is a link as it stands. `fr check` reports
+a link that points nowhere as an error, and warns where text refers to another part in
+words only ("see the … finding", "as noted in the … group above"): link it instead.
+
 ## The file
 
 ```json
@@ -131,13 +153,14 @@ explains that group or type.
 ### findings: what is smelly about a changed line
 
 ```json
-{"ref": {"repo": "shop", "file": "…/CheckoutController.java", "lines": "7-9", "side": "old"},
+{"id": "no-zone-check", "ref": {"repo": "shop", "file": "…/CheckoutController.java", "lines": "7-9", "side": "old"},
  "kind": "deleted-check", "severity": "high",
  "note": "The check that the address is in a delivery zone is gone; nothing else rejects an order the warehouse cannot ship."}
 ```
 
 Shown under the last cited line, in the diff, with the cited lines marked in the gutter.
-`also`: optional, more citations of changed lines where the same problem shows (a cause in
+`id`: optional, letters, digits, `-` `_` `.`, unique among the findings: for links to
+this finding from other text (`#finding:<id>`). `also`: optional, more citations of changed lines where the same problem shows (a cause in
 one service, its effect in another): each is marked too, with a pointer to the finding.
 `kind`: a few words, shown as the badge (`deleted-check`, `money`, `transaction`,
 `changed-exception-handling`, `concurrency`, …: the signals of discovery §4, at their

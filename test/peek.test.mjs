@@ -106,3 +106,56 @@ test('several places on the row: in the order they stand there, files and names 
   assert.match(line, /1 RefundRequest .*2 RefundService\.java:5 .*3 refund \w+\.java:\d+/);
   assert.equal(peekChoices(targets.slice(0, 1), 0, 200), null);
 });
+
+// ---------- links to other parts of the review ----------
+import { linksIn, hunkIdsIn, resolveSection, unlinkedRefs } from '../src/sections.mjs';
+import { checkAnnotations, unitIds } from '../src/annotations.mjs';
+import { sampleAnnotations } from './fixture.mjs';
+
+const linked = () => {
+  const ann = sampleAnnotations();
+  ann.findings[0].id = 'no-check';
+  ann.findings.push({ ref: ann.findings[0].ref, kind: 'money', note: 'A negative amount pays out: see [the deleted check](#finding:no-check), in gateway:H3, and [the key](#design:RefundService).' });
+  return ann;
+};
+
+test('links: Markdown links to anchors, hunk ids of the worktrees; resolved against the file', () => {
+  assert.deepEqual(linksIn('see [the check](#finding:no-check) and [g](#group:refund-key)').map((l) => `${l.kind}:${l.key}=${l.text}`), ['finding:no-check=the check', 'group:refund-key=g']);
+  assert.deepEqual(hunkIdsIn('in gateway:H3, not other:H2', new Set(['gateway'])).map((l) => l.key), ['gateway:H3']);
+  const ann = linked();
+  assert.equal(resolveSection(ann, { kind: 'finding', key: 'no-check' }).i, 0);
+  assert.equal(resolveSection(ann, { kind: 'group', key: 'refund-key' }).ok, true);
+  assert.match(resolveSection(ann, { kind: 'finding', key: 'nope' }).error, /no finding with id "nope"/);
+  assert.match(resolveSection(ann, { kind: 'chapter', key: 'x' }).error, /no anchor "chapter"/);
+  assert.equal(resolveSection(ann, { kind: 'hunk', key: 'gateway:H3' }, unitIds(ws)).ok, true);
+  // words that refer to another part, unlinked; linked ones are fine
+  assert.deepEqual(unlinkedRefs('Slow retries (see the check-then-act finding on `RefundService`) overlap.'), ['see the check-then-act finding']);
+  assert.deepEqual(unlinkedRefs('See [the check-then-act finding](#finding:race) on it.'), []);
+  assert.deepEqual(unlinkedRefs('See gateway:H3 above.'), []);
+});
+
+test('fr check: every link resolves, finding ids are unique, references in words only are warned about', async () => {
+  const ann = linked();
+  ann.findings[1].note += ' As noted in the config group above, it is per replica. And [gone](#finding:gone).';
+  ann.findings.push({ ...ann.findings[0] });
+  const c = await checkAnnotations(ann, ws);
+  assert.ok(c.errors.some((e) => e.at === 'findings[1].note' && /#finding:gone: no finding with id "gone"/.test(e.msg)), JSON.stringify(c.errors));
+  assert.ok(c.errors.some((e) => e.at === 'findings[2].id' && /used twice/.test(e.msg)));
+  assert.ok(c.warnings.some((w) => w.at === 'findings[1].note' && /As noted in the config group/.test(w.msg) && /#finding:<id>/.test(w.msg)), JSON.stringify(c.warnings));
+  assert.ok(!c.errors.some((e) => e.at.endsWith(".note") && /no-check|RefundService|gateway:H3/.test(e.msg)), "the links that resolve");
+});
+
+test('the peek: links on the row in their order, as parts of the review; a hunk id as its code', async () => {
+  const ann = linked();
+  const checked = { ann, ...(await checkAnnotations(ann, ws)) };
+  const src = ann.findings[1];
+  const { targets } = await targetsFor(ws, checked, src, { row: 'A negative amount pays out: see the deleted check, in gateway:H3, and the key.' });
+  const row = targets.filter((t) => t.row);
+  assert.deepEqual(row.map((t) => (t.how === 'section' ? `${t.section.kind}:${t.section.key}` : t.hunk)), ['finding:no-check', 'gateway:H3', 'design:RefundService']);
+  // the finding carries the code it cites; the hunk is its code
+  assert.equal(row[0].code.file, 'src/main/java/shop/gateway/RefundController.java');
+  assert.equal(row[1].file, 'src/main/java/shop/gateway/RefundRequest.java');
+  // a link that points nowhere: in the list, saying so
+  const bad = await targetsFor(ws, checked, { note: 'see [it](#group:nope)' });
+  assert.match(bad.targets[0].error, /no group with id "nope"/);
+});

@@ -529,6 +529,62 @@ test('a question asked on a group\'s text: waiting, then answered, under that pa
   fs.rmSync(st0, { force: true });
 });
 
+test('p on a link to another part of the review: that part in the pane; ⏎ goes there, gt comes back', async () => {
+  const annFile = path.join(dir, '.feature-review', 'annotations.json');
+  const saved = fs.readFileSync(annFile, 'utf8');
+  const ann = JSON.parse(saved);
+  ann.findings[0].id = 'no-check';
+  ann.findings.push({ ref: ann.findings[0].ref, kind: 'money', note: 'A negative amount pays out: see [the deleted check](#finding:no-check), in gateway:H3, and [the key](#design:RefundService). Why: [the key group](#group:refund-key).' });
+  fs.writeFileSync(annFile, JSON.stringify(ann));
+  try {
+    const { term, v } = await viewer({ rows: 50, cols: 130, layout: 'unified' });
+    const scr = () => term.screen().join('\n');
+    await term.type('/', ...'pays out', '\r', '\x1b', 'p');
+    await sleep(300);
+    const p = v.ui.peek;
+    assert.deepEqual(p.targets.filter((t) => t.row).map((t) => t.hunk ?? `${t.section.kind}:${t.section.key}`), ['finding:no-check', 'gateway:H3', 'design:RefundService', 'group:refund-key']);
+    // the finding as the review shows it, then its code
+    assert.match(scr(), /PEEK +1\/\d+ [ ─]+finding no-check: deleted-check ─ in the review · ⏎ goes there/);
+    assert.match(scr(), /1 the deleted check .*2 gateway:H3 .*3 the key/);
+    assert.match(scr(), /DELETED CHECK[\s\S]*nothing else rejects a negative refund[\s\S]*if \(amount <= 0\)/);
+    // ⏎ on it: the finding in the diff; gt: back, the peek open again
+    const back = plain(v.ui.rows[v.ui.cur].segs);
+    await term.type('\r');
+    assert.equal(v.ui.peek, null);
+    assert.equal(v.ui.rows[v.ui.cur].callout, 'finding:0');
+    assert.match(scr(), /finding no-check: deleted-check +gt: back/);
+    await term.type('g', 't');
+    assert.equal(plain(v.ui.rows[v.ui.cur].segs), back);
+    assert.ok(v.ui.peek);
+    // the design entry: from the overview; ⏎ opens it there, gt comes back to the diff
+    await term.type('3');
+    await sleep(200);
+    assert.match(scr(), /design entry RefundService ─ in the overview/);
+    assert.match(scr(), /Books a refund/);
+    await term.type('\r');
+    assert.equal(v.ui.ov?.tab, 'design');
+    assert.equal(v.ui.ov.rows[v.ui.ov.cur].item, 'design:RefundService');
+    await term.type('g', 't');
+    assert.equal(v.ui.ov, null);
+    assert.equal(plain(v.ui.rows[v.ui.cur].segs), back);
+    // the hunk: its code
+    await term.type('2');
+    await sleep(200);
+    assert.match(scr(), /public record RefundRequest/);
+    // a group: its header, why and parts; ⏎: its header in the review
+    const g = v.ui.peek.targets.findIndex((t) => t.section?.kind === 'group');
+    assert.ok(g >= 0);
+    await term.type(String(g + 1));
+    await sleep(200);
+    assert.match(scr(), /group Refunds carry an idempotency key[\s\S]*Retries of a refund must not book it twice[\s\S]*INTERFACE/);
+    await term.type('\r');
+    assert.equal(v.ui.rows[v.ui.cur].kind, 'group');
+    assert.equal(v.ui.rows[v.ui.cur].group, 'refund-key');
+  } finally {
+    fs.writeFileSync(annFile, saved);
+  }
+});
+
 test('the cursor is written for the agent ("this line"), a moment after it stops', async () => {
   const file = path.join(dir, '.feature-review', 'cursor.json');
   fs.rmSync(file, { force: true });

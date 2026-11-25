@@ -948,3 +948,31 @@ export function buildRows(ws, st, { width = 120, layout = 'auto', fold = new Map
   // services lens): under it, where that text shows
   return proseQa(ctx, [...top, ...body]);
 }
+
+/**
+ * A part of the review a link points at (sections.mjs), as the review shows it, for the
+ * peek: a finding as its note in the diff, a group as its header, why and parts. →
+ * [row] (rows with segs; none for other kinds: the overview draws those). sec:
+ * resolveSection().
+ */
+export function sectionRows(ws, checked, sec, { width = 100 } = {}) {
+  const ctx = { width, fold: new Map(), show: { agent: true, fr: true, coverage: true, comments: true, questions: true } };
+  if (sec.kind === 'finding') {
+    const f = sec.item;
+    const res = checked?.refs?.get(f.ref) ?? null;
+    const c = { key: `finding:${sec.i}`, src: f, source: 'agent', about: `agent:finding${f?.kind ? `:${f.kind}` : ''}`, level: f.severity === 'low' ? 'info' : 'warn', label: human(f.kind || 'finding'), md: true, text: f.note ?? '', ref: res, refRaw: f.ref };
+    return calloutRows(ctx, c, {}, 0).filter((r) => !r.gap);
+  }
+  if (sec.kind === 'group') {
+    const g = sec.item;
+    const n = (checked?.groups ?? []).findIndex((x) => x.g === g || (g.id != null && x.g?.id === g.id));
+    const rows = [{ kind: 'group', segs: [[` ${n >= 0 ? `${n + 1}  ` : ''}`, 'bold'], [g.title ?? g.id, 'bold'], ...(g.risk ? [['   ', ''], [` ${String(g.risk).toUpperCase()} `, BADGE[g.risk] ?? 'inverse']] : []), ...(g.risk_signals?.length ? [['  ' + g.risk_signals.join(' · '), 'dim']] : [])] }];
+    if (g.why) rows.push(spacer(), ...mdRows(g.why, width - 2, {}).map((r) => ({ ...r, segs: [['  ', ''], ...r.segs] })));
+    for (const { p, res } of checked?.groups?.[n]?.parts ?? []) {
+      rows.push({ kind: 'part', segs: [['  ', ''], ...(p?.role ? [[` ${p.role.toUpperCase()} `, ROLE], ['  ', '']] : []), [refText(res, p?.ref), res?.ok ? 'bold' : 'red bold'], ...(res?.hunkId ? [[`  ${res.hunkId}`, 'dim']] : [])] });
+      if (p?.note) rows.push(...mdRows(p.note, width - 4, {}, { extra: 'dim' }).map((r) => ({ ...r, segs: [['    ', ''], ...r.segs] })));
+    }
+    return rows;
+  }
+  return [];
+}

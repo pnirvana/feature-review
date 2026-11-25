@@ -6,6 +6,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { STATE_DIR, git } from './workspace.mjs';
+import { linksIn, resolveSection, unlinkedRefs } from './sections.mjs';
 import { parseDoc } from './md/parse.mjs';
 
 export const annotationsPath = (root) => path.join(root, STATE_DIR, 'annotations.json');
@@ -214,6 +215,20 @@ export async function checkAnnotations(ann, ws) {
   };
   prose(ann, '');
 
+  // links to other parts of the review (sections.mjs): each resolves; a reference in words
+  // only gets one
+  const links = (x, at) => {
+    if (typeof x === 'string') {
+      for (const l of linksIn(x)) {
+        const r = resolveSection(ann, l, ids);
+        if (!r.ok) err(at, r.error);
+      }
+      for (const words of unlinkedRefs(x)) warn(at, `"${words}" refers to another part of the review in words only: link it, [${words.replace(/^(see|cf\.)\s+/i, '')}](#finding:<id>) (or #group:, #design:, #name:, #contract:, a hunk id), so p shows it`);
+    } else if (Array.isArray(x)) x.forEach((y, i) => links(y, `${at}[${i}]`));
+    else if (x && typeof x === 'object' && !isRef(x)) for (const [k, v] of Object.entries(x)) if (k !== 'written') links(v, at ? `${at}.${k}` : k);
+  };
+  links(ann, '');
+
   // groups
   const groups = [];
   const seen = new Set();
@@ -258,8 +273,15 @@ export async function checkAnnotations(ann, ws) {
     if (t.group !== undefined && !seen.has(t.group)) err(`${at}.group`, `no group "${t.group}"`);
     (t.flags ?? []).forEach((f, j) => oneOf(f?.kind, ENUMS.testFlag, `${at}.flags[${j}].kind`, true));
   });
+  const findingIds = new Set();
   each('findings', (f, at) => {
     needRef(f.ref, `${at}.ref`);
+    // an id: for links to it from other text ([…](#finding:<id>))
+    if (f.id !== undefined) {
+      if (!str(f.id) || !/^[\w.-]+$/.test(f.id)) err(`${at}.id`, 'letters, digits, - _ . only (a link names it: #finding:<id>)');
+      else if (findingIds.has(f.id)) err(`${at}.id`, `"${f.id}" is used twice`);
+      else findingIds.add(f.id);
+    }
     if (!str(f.kind)) err(`${at}.kind`, 'missing: what is smelly, in a few words (deleted-check, money, …)');
     if (!str(f.note)) err(`${at}.note`, 'missing');
     oneOf(f.severity, ENUMS.risk, `${at}.severity`);

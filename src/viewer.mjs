@@ -7,7 +7,8 @@ import path from 'node:path';
 import { loadWorkspace } from './workspace.mjs';
 import { readState, update, setMarks, addComment, editComment, deleteComment, addQuestion, pendingQuestions, deleteExplanation, deleteQuestion, withoutDeleted } from './state.mjs';
 import crypto from 'node:crypto';
-import { buildRows, highlightFiles, fid, unitsOf, readingOrder, groupFoldId, UNGROUPED, LAYERS, proseText } from './rows.mjs';
+import { resolveSection } from './sections.mjs';
+import { sectionRows, buildRows, highlightFiles, fid, unitsOf, readingOrder, groupFoldId, UNGROUPED, LAYERS, proseText } from './rows.mjs';
 
 const LAYER_NAMES = { agent: 'agent', fr: 'fr', coverage: 'coverage', comments: 'comments', questions: 'questions' };
 import { annotationsPath, readAnnotations, checkAnnotations } from './annotations.mjs';
@@ -38,7 +39,8 @@ const HELP = [
   'c               comment on the line under the cursor (on a file or hunk line: the file)',
   'e x             on a comment: edit it / delete it (x twice); x on an answer or a question: delete it',
   'o               open the line in $EDITOR',
-  'p               peek: the code a note points at (its citations, files and types named in it), in a pane',
+  'p               peek: the code a note points at (its citations, files and types named in it) and the',
+  '                parts of the review it links to (a finding, a group, an overview entry, a hunk id), in a pane',
   '                below; on a line of code: its whole file, the change in place, then what the notes under it cite.',
   '                In the pane, a cursor of its own: j/k move',
   '                n N or 1-9 another place (the list under its title)  + - more / less around it  = full screen  ⏎ go to its line (in the change)',
@@ -336,7 +338,7 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
     }
     if (ui.peek) {
       const msg = ui.flash && ui.flash.until > Date.now() ? [[' ' + ui.flash.msg, ui.flash.style]] : [[' ' + PEEK_KEYS, 'dim']];
-      const t = ui.peek.targets[ui.peek.i];
+      const t = codeOf(ui.peek.targets[ui.peek.i]) ?? {};
       const l = peekLine(t, ui.peek.rows[ui.peek.cur]);
       return [msg, [[' ', ''], [l ? `peek: ${t.repo}/${t.file}:${l.side === 'old' ? '-' : '+'}${l.n}` : '', 'gray']]];
     }
@@ -638,7 +640,10 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
     ui.pending = '';
     const i = TABS.findIndex((t) => t.id === ui.ov.tab);
     if (p === 'g' && k === 'g') (ui.ov.cur = 0), ovMove(0);
-    else if (k === 'g') return void (ui.pending = 'g');
+    else if (p === 'g' && k === 't') {
+      if (!ui.jumpBack) return flash('gt: back after ⏎ in the peek', 'dim');
+      return goBack();
+    } else if (k === 'g') return void (ui.pending = 'g');
     else if (k === 'j' || k === '\x1b[B') ovMove(1);
     else if (k === 'k' || k === '\x1b[A') ovMove(-1);
     else if (k === '\x04' || k === '\x1b[6~') ovMove(half);
@@ -1255,16 +1260,31 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
     if (!p.cache.has(t)) {
       peekLayout();
       draw();
-      p.cache.set(t, await peekLines(ui.ws, t).catch((e) => ({ error: e.message })));
+      p.cache.set(t, await (t.how === 'section' ? sectionView(t) : peekLines(ui.ws, t)).catch((e) => ({ error: e.message })));
     }
     if (ui.peek !== p) return;
     peekLayout(true);
     draw();
   }
+  /** A link to another part of the review: that part as the review shows it, then the code it cites. */
+  async function sectionView(t) {
+    if (!t.section) return { error: t.error };
+    // in the file as it is now (it may have been reloaded since)
+    const sec = resolveSection(ui.ann?.ann, t.section, ui.ann?.ids ?? []);
+    if (!sec.ok) return { error: sec.error };
+    const width = Math.max(30, W() - 2);
+    const tab = { design: 'design', name: 'names', contract: 'contracts' }[sec.kind];
+    const review = tab ? overviewRows(ui.ann, tab, { width }).filter((r) => r.item === `${tab}:${sec.key}` && !r.asked) : sectionRows(ui.ws, ui.ann, sec, { width });
+    const code = t.code && !t.code.error ? await peekLines(ui.ws, t.code).catch(() => null) : null;
+    return { review: review.map((r) => ({ segs: r.segs, review: true })), lines: code && !code.error ? code.lines : null };
+  }
+  /** The code a target shows: its own, or a linked part's (null: none). */
+  const codeOf = (t) => (t?.how === 'section' ? (t.code ?? null) : t);
   const CONTEXTS = [3, 8, 20, 50, Infinity];
   /** The line a peek row shows: {side, n} (a removed line: the base side), or null. */
   const peekLine = (t, r) => {
-    if (!r) return null;
+    t = codeOf(t);
+    if (!r || !t || r.review) return null;
     if (typeof r.line === 'number') return { side: t.side, n: r.line };
     const side = t.side === 'old' ? 'old' : 'new';
     if (r.at?.[side] != null) return { side, n: r.at[side] };
@@ -1283,6 +1303,16 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
       return;
     }
     const was = focus ? null : peekLine(t, p.rows[p.cur]);
+    if (got.review) {
+      // a part of the review: it, then the code it cites
+      const code = got.lines ? peekRows(got.lines, t.code, { width: W() - 2, context: p.context }) : null;
+      const more = (n, where) => (n ? [{ segs: [[`  ⋮ ${n} line${n === 1 ? '' : 's'} ${where} · + shows more`, 'dim']] }] : []);
+      p.rows = [...got.review, ...(code ? [{ segs: [] }, ...more(code.clipped.above, 'above'), ...code.rows, ...more(code.clipped.below, 'below')] : [])];
+      const same = was ? p.rows.findIndex((r) => { const l = peekLine(t, r); return l && l.side === was.side && l.n === was.n; }) : -1;
+      if (same >= 0) p.cur = same;
+      else if (focus || p.cur >= p.rows.length) p.top = p.cur = 0;
+      return;
+    }
     const { rows, focus: f, clipped } = peekRows(got.lines, t, { width: W() - 2, context: p.context });
     const more = (n, where) => (n ? [{ segs: [[`  ⋮ ${n} line${n === 1 ? '' : 's'} ${where} · + shows more`, 'dim']] }] : []);
     const off = p.rows.length && !focus ? p.cur - p.top : 2;
@@ -1354,28 +1384,40 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
     } else if (k === '=') p.full = !p.full;
     else if (k === '\r') return peekGo();
     else if (k === 'o') {
-      if (t.error || !t.dir) return flash('nothing to open', 'dim');
-      let file = path.join(t.dir, t.file);
+      const got = p.cache.get(t);
+      const c = codeOf(t);
+      if (!c || c.error || !c.dir) return flash(t.how === 'section' ? 'it cites no code to open' : 'nothing to open', 'dim');
+      return openInEditor(c, got);
+    } else if (k === '\x1b' || k === 'p' || k === 'q') closePeek();
+    else if (k === '?') ui.help = true;
+    draw();
+  }
+  /** o in the peek: the cursor's line of t's code in the editor (at the base: a read-only copy). */
+  function openInEditor(t, got) {
+    const p = ui.peek;
+    let file = path.join(t.dir, t.file);
       // at the cursor's line (a removed line: the next one there is)
       const below = p.rows.slice(p.cur).map((r) => peekLine(t, r)).find((l) => l && (t.side === 'old' ? l.side === 'old' : l.side === 'new'));
       const line = below?.n ?? t.from ?? 1;
       if (t.rev) {
         // the base: a copy to read (the worktree has the new side)
-        const got = p.cache.get(t);
         file = path.join(os.tmpdir(), `fr-base-${process.pid}-${path.basename(t.file)}`);
         try {
           fs.writeFileSync(file, (got?.lines ?? []).filter((l) => l.t !== (t.side === 'old' ? '+' : '-')).map((l) => l.s).join('\n') + '\n', { mode: 0o400 });
         } catch {}
       }
-      return runEditor(file, line);
-    } else if (k === '\x1b' || k === 'p' || k === 'q') closePeek();
-    else if (k === '?') ui.help = true;
-    draw();
+    return runEditor(file, line);
   }
   /** ⏎ in the peek: to that code in the review; gt comes back, the peek open again. */
   function peekGo() {
     const p = ui.peek;
-    const t = p.targets[p.i];
+    let t = p.targets[p.i];
+    if (t.how === 'section') {
+      // on its code, in the change: that line; elsewhere: the part itself
+      const c = t.code;
+      if (!c || c.error || !c.units.length || !peekLine(t, p.rows[p.cur])) return goSection(t);
+      t = c;
+    }
     if (t.error || t.external || !t.units.length) return flash(t.external ? 'outside the feature: o opens it in the editor' : 'not part of the change: + shows more of it, o opens it in the editor', 'dim');
     // the cursor's line, in the hunk that has it
     const l = peekLine(t, p.rows[p.cur]);
@@ -1397,6 +1439,54 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
     flash(`${t.repo}/${t.file}:${l.side === 'old' ? '-' : ''}${l.n}   gt: back`, 'cyan');
     draw();
   }
+  /** Where the reader is, for gt to come back to (the peek open again). */
+  function here() {
+    const p = ui.peek;
+    const key = rowKey(ui.rows[ui.cur]);
+    const nth = ui.rows.slice(0, ui.cur).filter((r) => rowKey(r) === key).length;
+    return { key, nth, off: ui.cur - (p?.back.top ?? ui.top), ov: ui.ov, peek: p };
+  }
+  /** ⏎ in the peek on a link to another part of the review: go there (in the overview, or the diff). */
+  function goSection(t) {
+    if (!t.section) return flash(`does not resolve: ${t.error}`, 'red');
+    // looked up again: the file may have been reloaded since the peek opened
+    const sec = resolveSection(ui.ann?.ann, t.section, ui.ann?.ids ?? []);
+    if (!sec.ok) return flash(`no longer there: ${sec.error}`, 'yellow');
+    const from = here();
+    const tab = { design: 'design', name: 'names', contract: 'contracts' }[sec.kind];
+    closePeek();
+    if (tab) {
+      if (!ui.ov) ui.ov = { tab, rows: [], cur: 0, top: 0, expanded: new Set() };
+      ui.ov = { ...ui.ov, tab, cur: 0, top: 0 };
+      ovLayout();
+      const i = ui.ov.rows.findIndex((r) => r.item === `${tab}:${sec.key}`);
+      if (i >= 0) (ui.ov.cur = i), (ui.ov.top = Math.max(0, i - 2));
+      ovMove(0);
+    } else {
+      ui.ov = null;
+      if (sec.kind === 'group') {
+        if (lensNow() !== 'groups') ui.lens = 'groups';
+        ui.fold.set(groupFoldId(sec.key), false);
+        relayout();
+        const i = ui.rows.findIndex((r) => r.kind === 'group' && r.group === sec.key);
+        if (i >= 0) (ui.cur = i), (ui.top = Math.max(0, i - 1));
+      } else if (sec.kind === 'finding') {
+        const res = ui.ann.refs.get(sec.item.ref);
+        if (!res?.ok || !res.units.length) {
+          ui.jumpBack = null;
+          return flash('the finding cites no changed line: it is not in the diff', 'yellow');
+        }
+        ui.fold.set(`c:finding:${sec.i}`, false);
+        jumpTo(res);
+        const i = ui.rows.findIndex((r) => r.callout === `finding:${sec.i}`);
+        if (i >= 0) (ui.cur = i), (ui.top = Math.max(0, i - 4));
+        else flash('the finding is hidden here (f, a): its line', 'yellow');
+      }
+    }
+    ui.jumpBack = { ...from, section: true, fid: ui.rows[ui.cur]?.fid ?? null };
+    if (!ui.flash || ui.flash.until < Date.now() || ui.flash.style === 'cyan') flash(`${sec.label}   gt: back`, 'cyan');
+    draw();
+  }
   function goBack() {
     const b = ui.jumpBack;
     ui.jumpBack = null;
@@ -1408,7 +1498,7 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
     if (b.ov) {
       ui.ov = b.ov;
       ovLayout();
-    }
+    } else ui.ov = null;
     ui.peek = b.peek;
     peekLayout();
     draw();
@@ -1453,7 +1543,7 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
     const p = ui.pending;
     ui.pending = '';
     if (p === 'g' && k === 'g') (ui.cur = 0), move(0);
-    else if (p === 'g' && k === 't') return ui.jumpBack && ui.rows[ui.cur]?.fid === ui.jumpBack.fid ? goBack() : jumpToPair();
+    else if (p === 'g' && k === 't') return ui.jumpBack && (ui.jumpBack.section || ui.rows[ui.cur]?.fid === ui.jumpBack.fid) ? goBack() : jumpToPair();
     else if (p === ']' || p === '[') {
       const dir = p === ']' ? 1 : -1;
       if (k === p) jump((r) => r.kind === 'file' || r.kind === 'part', dir);

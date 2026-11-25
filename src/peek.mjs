@@ -8,7 +8,8 @@
 // guesses and say so ("named in the text", "found by name").
 import fs from 'node:fs';
 import path from 'node:path';
-import { isRef } from './annotations.mjs';
+import { isRef, unitIds } from './annotations.mjs';
+import { linksIn, hunkIdsIn, resolveSection } from './sections.mjs';
 import { git } from './workspace.mjs';
 import { codeView } from './md/render.mjs';
 import { pad, segsWidth } from './md/term.mjs';
@@ -124,6 +125,13 @@ export async function targetsFor(ws, checked, src, { first = null, names = true,
     };
     const items = [];
     const once = new Set();
+    // links to other parts of the review: their text shows on the row
+    for (const l of sectionsOf(ws, src, variants)) {
+      const pos = l.kind === 'hunk' ? at(l.key) : at(l.text);
+      if (pos < 0 || once.has(`§${l.kind}:${l.key}`)) continue;
+      once.add(`§${l.kind}:${l.key}`);
+      items.push({ pos, name: l.text, find: async () => [sectionTarget(ws, checked, l)] });
+    }
     for (const p of m.paths) {
       const name = `${p.file}${p.from != null ? `:${p.from}${p.to !== p.from ? `-${p.to}` : ''}` : ''}`;
       if (once.has(name)) continue;
@@ -145,11 +153,50 @@ export async function targetsFor(ws, checked, src, { first = null, names = true,
   const refs = refsIn(src);
   if (first && !refs.includes(first)) refs.unshift(first);
   for (const ref of refs) add(fromRef(ws, checked, ref));
+  // then the other parts of the review it links to
+  for (const l of sectionsOf(ws, src).slice(0, 12)) add(sectionTarget(ws, checked, l));
   const { paths, symbols } = mentionsIn(src);
   for (const p of paths.slice(0, 12)) for (const t of await findPath(ws, p)) add(t);
   if (names) for (const s of symbols.slice(0, 8)) for (const t of await findSymbol(ws, s)) add(t);
   const at = first ? out.findIndex((t) => t.ref === first) : 0;
   return { targets: out, at: Math.max(0, at) };
+}
+
+/** The links to other parts of the review in an item's text (and hunk ids), in order; also: rendered rows' hunk ids. */
+function sectionsOf(ws, src, also = []) {
+  const repos = new Set(ws.repos.map((r) => r.name));
+  const out = [];
+  const seen = new Set();
+  for (const t of [...textsIn(src), ...also]) {
+    for (const l of [...linksIn(t), ...hunkIdsIn(t, repos)].sort((a, b) => a.index - b.index)) {
+      const k = `${l.kind}:${l.key}`;
+      if (!seen.has(k)) seen.add(k), out.push(l);
+    }
+  }
+  return out;
+}
+
+/**
+ * A link as a target. A hunk: its code. Another part: {how: 'section', section (resolved),
+ * code (the code it cites, as a target, or null)}; repo '§' and file kind:key keep it apart
+ * from code.
+ */
+export function sectionTarget(ws, checked, l) {
+  const ids = checked?.ids ?? unitIds(ws);
+  const sec = resolveSection(checked?.ann, l, ids);
+  const named = l.text;
+  if (sec.ok && sec.kind === 'hunk') {
+    const u = sec.item;
+    const repo = ws.repos.find((r) => r.name === u.repo);
+    const old = u.f.status === 'D';
+    const h = u.h;
+    const [a, n] = !h ? [null, 0] : old ? [h.oldStart, h.oldCount] : [h.newStart, h.newCount];
+    return { how: 'named', named, hunk: sec.key, repo: u.repo, dir: repo?.dir, file: old ? (u.f.old ?? u.f.file) : u.f.file, side: old ? 'old' : 'new', rev: old ? repo?.base : null, from: h ? a : null, to: h ? a + Math.max(1, n) - 1 : null, units: [u.unit] };
+  }
+  if (!sec.ok) return { how: 'section', named, section: null, repo: '§', file: `${l.kind}:${l.key}`, side: 'new', from: null, to: null, units: [], error: sec.error };
+  const x = sec.item;
+  const ref = x.ref ?? x.producer?.ref ?? null;
+  return { how: 'section', named, section: sec, code: isRef(ref) ? fromRef(ws, checked, ref) : null, repo: '§', file: `${sec.kind}:${sec.key}`, side: 'new', from: null, to: null, units: [] };
 }
 
 /** A structured citation as a target. */
@@ -291,6 +338,11 @@ export async function peekLines(ws, t) {
 
 /** The label of a target: where, and what it is. */
 export function targetText(t) {
+  if (t.how === 'section') {
+    if (!t.section) return { where: `#${t.file}`, what: `does not resolve: ${t.error}` };
+    const inOv = ['design', 'name', 'contract'].includes(t.section.kind);
+    return { where: t.section.label, what: `${inOv ? 'in the overview' : 'in the review'} · ⏎ goes there` };
+  }
   const where = `${t.repo}/${t.file}${t.from != null ? `:${t.side === 'old' ? '-' : ''}${t.from === t.to ? t.from : `${t.from}-${t.to}`}` : ''}`;
   const what = t.error
     ? `does not resolve: ${t.error}`
@@ -348,6 +400,8 @@ export function peekTitle(t, i, n, width) {
 export function targetName(t, all = []) {
   const file = `${path.basename(t.file ?? '?')}${t.from != null ? `:${t.from}` : ''}`;
   // a file named: its name and line (the title has the path)
+  if (t.hunk) return t.hunk;
+  if (t.how === 'section') return t.named.length > 32 ? `${t.named.slice(0, 31)}…` : t.named;
   const name = t.how === 'named' ? null : (t.named ?? t.symbol ?? null);
   if (!name) return file;
   // one name, several places (refund in two classes): which one

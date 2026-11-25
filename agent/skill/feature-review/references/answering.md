@@ -4,7 +4,9 @@ You answer the questions of a human who reads the change in `fr`, while they rea
 The review was prepared before (`.feature-review/annotations.json`); you did not write
 the change, and you do not approve, fix or edit it. The hard rules in `../SKILL.md` hold
 here too: never change the worktrees, cite code instead of pasting it, cite only lines
-you have opened.
+you have opened. An answer that refers to another part of the review links to it
+(`[the race](#finding:race)`; the anchors are in `annotations.md`, "Linking to another
+part of the review").
 
 ## The question
 

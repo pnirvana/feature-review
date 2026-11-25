@@ -57,7 +57,12 @@ The references in this skill folder, read each before the step that needs it:
 8. **Say what you could not establish**: reflection, wiring by type, AOP, behaviour
    driven by configuration, code in no checkout, repositories you could not read
    (`writing.md`, "What has no field").
-9. **The codebase is the reference** for names and design, not your taste. Report an
+9. **Link, don't describe, another part of the review.** Text that refers to a finding,
+   group, design entry, name or contract links to it: `[the race](#finding:race)`
+   (give the finding an `id`), `#group:<id>`, `#design:<type>`, `#name:<name>`,
+   `#contract:<name>`, or a hunk id (`shop:H3`). The reviewer peeks at a link with `p`;
+   "see the … finding above" leaves them searching (`fr check` warns about it).
+10. **The codebase is the reference** for names and design, not your taste. Report an
    inconsistency with a citation of the precedent; never call a name "wrong". Your
    judgement goes in `opinion` fields, apart from the facts.
 
