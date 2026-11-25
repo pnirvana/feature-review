@@ -124,7 +124,7 @@ export function placeText(t) {
 /** The prompt for one question; the first one also says who the agent is and what to read. */
 export function questionPrompt({ root, question, target, first, id = null }) {
   const where = target ? placeText(target) : 'about the whole change (asked from the overview, Questions tab)';
-  const shows = target?.overview ? 'in the overview, under what they asked about' : target?.line ? 'under the line' : "in the overview's Questions tab";
+  const shows = target?.overview ? 'in the overview, under what they asked about' : target?.line ? 'under the line' : target?.text || target?.group ? 'under the text they asked on' : "in the overview's Questions tab";
   const intro = first
     ? [
         `[fr] You answer the questions of a human reviewing the feature in ${root} with fr (feature review).`,

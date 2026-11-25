@@ -245,7 +245,9 @@ in the review state and shows each, marked ASKED, until an entry with its id is 
 A question typed into the agent's pane has no id. An answer citing changed lines is
 shown under them in the diff, the question above it, marked EXPLAINED and tinted apart
 from the prepared review. An answer to a question asked on an entry of the overview is
-shown under that entry instead (fr knows where from the question's id), whatever it cites.
+shown under that entry instead (fr knows where from the question's id), whatever it cites;
+one asked on text in the review (a group's header or why, a part's note, the intent, a
+note under a hunk), under that paragraph.
 Every answer is in the overview's Questions tab, the general ones only there. `f 5` hides them; space folds one to a single line. The reviewer deletes one with `x`: recorded in the review
 state (`deleted`, by `asked`, else by question and answer), not here, so an agent
 rewriting this file cannot bring it back. They are kept apart from `findings`: the prepared review stays as it was

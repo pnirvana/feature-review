@@ -7,7 +7,7 @@ import path from 'node:path';
 import { loadWorkspace } from './workspace.mjs';
 import { readState, update, setMarks, addComment, editComment, deleteComment, addQuestion, pendingQuestions, deleteExplanation, deleteQuestion, withoutDeleted } from './state.mjs';
 import crypto from 'node:crypto';
-import { buildRows, highlightFiles, fid, unitsOf, readingOrder, groupFoldId, UNGROUPED, LAYERS } from './rows.mjs';
+import { buildRows, highlightFiles, fid, unitsOf, readingOrder, groupFoldId, UNGROUPED, LAYERS, proseText } from './rows.mjs';
 
 const LAYER_NAMES = { agent: 'agent', fr: 'fr', coverage: 'coverage', comments: 'comments', questions: 'questions' };
 import { annotationsPath, readAnnotations, checkAnnotations } from './annotations.mjs';
@@ -116,15 +116,21 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
   /** The layout on screen: auto is split when the code is 110 columns wide (codeView), else unified. */
   const shownLayout = () => (ui.layout !== 'auto' ? ui.layout : opts().width - (lensNow() === 'groups' ? 2 : 0) >= 110 ? 'split' : 'unified');
   const opts = () => ({ width: Math.max(30, W() - 2), layout: ui.layout, fold: ui.fold, hl: ui.hl, lens: lensNow(), ann: ui.ann, quiet: ui.quiet, show: ui.show, reveal: ui.reveal });
-  function relayout(keep = rowKey(ui.rows[ui.cur])) {
+  // the rows of a text (a group's why, a note) share a key: its text tells them apart
+  const textOf = (r) => (r && r.kind !== 'code' && !r.spacer ? proseText(r) : null);
+  function relayout(keep = rowKey(ui.rows[ui.cur]), text = keep === rowKey(ui.rows[ui.cur]) ? textOf(ui.rows[ui.cur]) : null) {
     if (!ui.ws) return;
     ui.rows = buildRows(ui.ws, ui.st, opts());
     if (ui.search) ui.search.hits = searchHits(ui.search.q);
-    restore(keep);
+    restore(keep, text);
   }
-  function restore(key) {
+  function restore(key, text = null) {
     if (key) {
       let i = ui.rows.findIndex((r) => rowKey(r) === key);
+      if (i >= 0 && text) {
+        const t = ui.rows.findIndex((r, j) => j >= i && rowKey(r) === key && textOf(r) === text);
+        if (t >= 0) i = t;
+      }
       if (i < 0) {
         // the row is gone (folded, reloaded): the nearest row of the same hunk or file
         const [, g, f, h] = key.split('|');
@@ -756,8 +762,9 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
     const bodyH = Math.max(1, H() - 3);
     const screen = at >= ui.top && at < ui.top + bodyH ? at - ui.top : ui.cur - ui.top;
     const key = rowKey(ui.rows[at]);
+    const text = textOf(ui.rows[at]);
     change();
-    relayout(key);
+    relayout(key, text);
     ui.top = Math.max(0, ui.cur - Math.max(0, Math.min(screen, bodyH - 1)));
     draw();
   }
@@ -1050,10 +1057,13 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
         flash('asking the agent…', 'dim');
         const id = `q-${crypto.randomBytes(3).toString('hex')}`;
         const about = target;
+        // asked on text, not on a line of code: the row's text, to show it under that paragraph
+        const r = !ui.ov && !target?.line ? ui.rows[ui.cur] : null;
+        const prose = r && !r.spacer && r.kind !== 'code' ? proseText(r) || null : null;
         askAgent({ root: ui.ws.root, question: text, target: about, id, env, kind: agentKind, definition: agentDefinition || null, model: agentModel || null, args: agentArgs }).then(
           (r) => {
             // kept in the review state: it shows, waiting, until the answer is in the file
-            const at = ovAt ? { ov: { tab: ovAt.item.split(':')[0], item: ovAt.item, title: ovAt.title, at: ovAt.at } } : about ? { repo: about.repo ?? null, file: about.file ?? null, side: about.line?.side ?? null, line: about.line?.n ?? null, quote: about.quote ?? null, hunk: about.hunk ?? null, group: about.group ?? null } : {};
+            const at = ovAt ? { ov: { tab: ovAt.item.split(':')[0], item: ovAt.item, title: ovAt.title, at: ovAt.at } } : about ? { repo: about.repo ?? null, file: about.file ?? null, side: about.line?.side ?? null, line: about.line?.n ?? null, quote: about.quote ?? null, hunk: about.hunk ?? null, group: about.group ?? null, ...(prose ? { prose } : {}) } : {};
             // it shows at once, waiting, even where the notes are hidden
             ui.reveal.add(id);
             if (save((st) => addQuestion(st, id, at, text.trim()))) {

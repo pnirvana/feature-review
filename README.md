@@ -40,7 +40,9 @@ the Agent Skills format, so harnesses other than Pi can load it too.
 `A` asks an agent about the line under the cursor. In the overview it asks about the
 entry under the cursor (a design note, a name, a contract, a rollout step, or the tab
 itself), and the answer shows under that entry; in the Questions tab, about the whole
-change. The question is written in the same multi-line field as a comment; fr sends it
+change. Asked on text rather than a line of code (a group's header or description, a
+part's note, the intent, a note under a hunk), the question and its answer show under the
+paragraph asked on. The question is written in the same multi-line field as a comment; fr sends it
 with the place (repository, file, line, hunk, group, the line's text or the note under
 the cursor) to an agent in a herdr pane beside fr. The first question opens that pane and
 starts the agent there (`agent.kind`, Pi by default) as the agent definition

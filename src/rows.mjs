@@ -145,6 +145,39 @@ const band = (segs, width, bg) =>
 /** Prefix a group's rows with its guide bar. */
 const guided = (rows, guide) => rows.map((r) => ({ ...r, segs: [['▎ ', guide], ...r.segs] }));
 
+/** A row's text without the bars and marks before it: where a question was asked on prose (q.prose). */
+export const proseText = (r) => plain(r?.segs ?? []).replace(/^[\s▎┃▌│]+/, '').replace(/\s+/g, ' ').trim();
+
+/**
+ * Puts the questions asked on text (ctx.prose) under the paragraph they were asked on, in
+ * rows (a group's body, or all rows): the rows from the one asked on up to a blank row or
+ * the end of that text. group: only that group's questions; head: its header rows (a
+ * question asked there goes first in the body); fallback: those whose text is gone, first
+ * in the body. Each is placed once.
+ */
+function proseQa(ctx, rows, { group = undefined, head = [], width = ctx.width } = {}) {
+  const todo = [...ctx.prose.values()].filter(({ q }) => !ctx.prosePlaced.has(q.id) && (group === undefined || q.group === group));
+  if (!todo.length) return rows;
+  const at = new Map();
+  const put = (end, x) => (at.set(end, [...(at.get(end) ?? []), x]), ctx.prosePlaced.add(x.q.id));
+  const lead = rows.findIndex((r) => !r.spacer);
+  for (const x of todo) {
+    const i = rows.findIndex((r) => !r.spacer && !r.callout && r.kind !== 'code' && proseText(r) === x.q.prose);
+    if (i >= 0) {
+      let end = i + 1;
+      while (end < rows.length && !rows[end].spacer && !rows[end].callout && rows[end].kind !== 'code' && rows[end].src === rows[i].src && proseText(rows[end])) end++;
+      put(end, x);
+    } else if (group !== undefined && (head.some((r) => proseText(r) === x.q.prose) || x.q.group === group)) put(Math.max(0, lead), x);
+  }
+  const out = [...rows];
+  for (const end of [...at.keys()].sort((a, b) => b - a)) {
+    const base = { ...(group !== undefined ? { group } : {}) };
+    const qa = at.get(end).filter(({ c }) => ctx.show.questions || ctx.revealed(c)).flatMap(({ c }) => calloutRows({ ...ctx, width }, c, base, 2));
+    out.splice(end, 0, ...qa);
+  }
+  return out;
+}
+
 /**
  * An annotation's prose, Markdown, as rows: paragraphs, lists, quotes, tables, inline code
  * and emphasis, as ATF's review documents rendered it. `extra` adds a style to every
@@ -210,12 +243,28 @@ function context(ws, st, opts) {
     const c = { key: `asked:${q.id}`, asked: q.id, source: 'agent', layer: 'questions', pending: true, about: 'asked', level: 'info', label: 'ASKED', question: q.question, text: "waiting for the agent's answer (in its pane until then)", md: false, side: loc.side, from: loc.line, to: loc.line };
     byUnit.set(h.key, [...(byUnit.get(h.key) ?? []), c]);
   }
+  // asked on text, not on a line of code (a group's header or why, a part's note, the intent,
+  // a note under a hunk): under the paragraph asked on, it and its answer (proseQa)
+  const prose = new Map();
+  const explained = Array.isArray(opts.ann?.ann?.explanations) ? opts.ann.ann.explanations : [];
+  for (const q of st.questions ?? []) {
+    // (asked before fr kept the text: a group's go first in it)
+    if ((!q.prose && !(q.group && !q.file && !q.hunk)) || q.line != null || q.ov) continue;
+    const i = explained.findIndex((e) => e?.asked && String(e.asked) === q.id);
+    const e = explained[i];
+    const c = e
+      ? { key: `explain:${i}`, src: e, source: 'agent', layer: 'questions', about: 'agent:explanation', level: 'info', label: 'EXPLAINED', asked: q.id, question: String(e.question ?? q.question ?? '').trim(), text: e.answer ?? '', md: true }
+      : { key: `asked:${q.id}`, asked: q.id, source: 'agent', layer: 'questions', pending: true, about: 'asked', level: 'info', label: 'ASKED', question: q.question, text: "waiting for the agent's answer (in its pane until then)", md: false };
+    prose.set(q.id, { q, c });
+  }
+  // its answer shows there, not under a line it cites
+  for (const [u, list] of [...byUnit]) if (list.some((c) => c.asked && prose.has(c.asked))) byUnit.set(u, list.filter((c) => !(c.asked && prose.has(c.asked))));
   // a question just asked, and its answer, show whatever is hidden (h, a, f): the reader is waiting for them
   const reveal = opts.reveal ?? new Set();
   const revealed = (c) => Boolean(c.asked && reveal.has(c.asked));
   const callouts = new Map([...byUnit].map(([u, list]) => [u, list.filter((c) => show[c.source === 'agent' ? (c.layer ?? 'agent') : c.layer] || revealed(c))]));
   const notes = show.agent ? notesByUnit(opts.ann, inlined) : new Map();
-  return { ws, st, ...opts, show, revealed, marked, settled, sig, comments, callouts, inlined, shown: new Set(), notes, placed: new Set() };
+  return { ws, st, ...opts, show, revealed, marked, settled, sig, comments, callouts, inlined, shown: new Set(), notes, placed: new Set(), prose, prosePlaced: new Set() };
 }
 
 /**
@@ -780,7 +829,10 @@ function groupsLens(ctx) {
       ...(verified ? [['     ', ''], [' MECHANICAL ', 'fact'], [' verified by fr', 'dim']] : g.mechanical ? [[`     claimed mechanical: ${unverified} of ${plural(units.length, 'hunk')} not verified`, 'yellow']] : []),
     ];
     rows.push(...groupHead(ctx, { gid, n: gi + 1, title: g.title ?? gid, folded, units, meta, bg: BAND.group }).map((r) => ({ ...r, src: g })));
-    if (folded) return;
+    if (folded) {
+      for (const { q } of ctx.prose.values()) if (q.group === gid) ctx.prosePlaced.add(q.id);
+      return;
+    }
     const body = [];
     if (g.why || g.mechanical) body.push(spacer(base));
     if (g.why) body.push(...mdRows(g.why, inner.width, { ...base, src: { why: g.why } }));
@@ -830,7 +882,7 @@ function groupsLens(ctx) {
       for (const it of items.filter((x) => x.again)) body.push({ kind: 'note', ...it.base, segs: [['(shown above in this group)', 'dim']] });
       body.push(...hunksRows(inner, items.filter((x) => !x.again), null));
     }
-    rows.push(...guided(body, guide));
+    rows.push(...guided(proseQa(ctx, body, { group: gid, head: rows.filter((r) => r.group === gid && r.kind !== 'blank'), width: inner.width }), guide));
   });
 
   // what no group covers, by file: never hidden
@@ -892,5 +944,7 @@ export function buildRows(ws, st, { width = 120, layout = 'auto', fold = new Map
     top.push(...mdRows(ann.ann.overview, width - 2, { src: { overview: ann.ann.overview } }).map((r) => ({ ...r, about: 'agent:overview', segs: [['  ', ''], ...r.segs] })));
   }
   top.push(spacer(), spacer());
-  return [...top, ...body];
+  // the questions asked on other text (the intent, a note under a hunk; any group's in the
+  // services lens): under it, where that text shows
+  return proseQa(ctx, [...top, ...body]);
 }

@@ -7,6 +7,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { PassThrough, Writable } from 'node:stream';
 import { makeSample, sampleAnnotations } from './fixture.mjs';
+import { buildRows } from '../src/rows.mjs';
 import { runViewer } from '../src/viewer.mjs';
 import { readState } from '../src/state.mjs';
 import { plain } from '../src/md/term.mjs';
@@ -486,6 +487,44 @@ test('a question asked on an overview entry: waiting, then answered, under that 
   while (!v.ui.ov.rows[v.ui.ov.cur]?.del) await term.type('j');
   await term.type('x', 'x');
   assert.doesNotMatch(scr(), /in memory only/);
+  fs.writeFileSync(annFile, saved);
+  fs.rmSync(st0, { force: true });
+});
+
+test('a question asked on a group\'s text: waiting, then answered, under that paragraph, not elsewhere', async () => {
+  const st0 = path.join(dir, '.feature-review', 'state.json');
+  const annFile = path.join(dir, '.feature-review', 'annotations.json');
+  const saved = fs.readFileSync(annFile, 'utf8');
+  fs.rmSync(st0, { force: true });
+  const asked = [];
+  const { term, v } = await viewer({ rows: 50, cols: 130, layout: 'unified', env: { HERDR_PANE_ID: 'w:p1' }, askAgent: async (q) => (asked.push(q), { name: 'a', pane: 'p', started: false }) });
+  await term.type('/', ...'Retries of a refund', '\r', '\x1b');
+  assert.match(plain(v.ui.rows[v.ui.cur].segs), /Retries of a refund/);
+  await term.type('A', ...'why not a header?', '\r');
+  await new Promise((r) => setTimeout(r, 30));
+  assert.match(plain(v.ui.rows[v.ui.cur].segs), /Retries of a refund/, 'the cursor stays on the text asked on');
+  const scr = () => term.screen().join('\n');
+  const idx = (re) => v.ui.rows.findIndex((r) => re.test(plain(r.segs)));
+  // under the paragraph asked on, before the list that follows it
+  assert.match(scr(), /Retries of a refund[\s\S]*ASKED[\s\S]*why not a header\?[\s\S]*RefundRequest gains/);
+  assert.ok(idx(/why not a header/) > idx(/Retries of a refund/) && idx(/why not a header/) < idx(/RefundRequest gains/));
+  // the agent answers, citing a line: still there, not under that line
+  const ann = JSON.parse(saved);
+  ann.explanations.push({ asked: asked[0].id, question: 'why not a header?', answer: 'The key is in the body: idempotent retries.', ref: { repo: 'refund-service', file: 'src/main/java/shop/refund/RefundService.java', lines: '5' } });
+  fs.writeFileSync(annFile, JSON.stringify(ann));
+  for (let i = 0; i < 40 && !/idempotent retries/.test(scr()); i++) await new Promise((r) => setTimeout(r, 100));
+  assert.match(scr(), /Retries of a refund[\s\S]*EXPLAINED[\s\S]*why not a header\?[\s\S]*idempotent retries[\s\S]*RefundRequest gains/);
+  assert.equal(v.ui.rows.filter((r) => /idempotent retries/.test(plain(r.segs))).length, 1, 'once');
+  // asked on the group's header: first in its body
+  while (!/HIGH/.test(plain(v.ui.rows[v.ui.cur].segs))) await term.type('k');
+  await term.type('A', ...'what is this group?', '\r');
+  await new Promise((r) => setTimeout(r, 30));
+  assert.match(scr(), /Refunds carry an idempotency key[\s\S]*ASKED +waiting for the agent[^\n]*\n[^\n]*what is this group\?[\s\S]*Retries of a refund/);
+  // asked before fr kept the text: in its group, first
+  const older = { ...v.ui.st, questions: [{ id: 'q-old001', group: 'refund-key', question: 'an older one?', at: '2026-01-01T00:00:00Z' }] };
+  const built = buildRows(v.ui.ws, older, { width: 130, layout: 'unified', lens: 'groups', ann: v.ui.ann }).map((r) => plain(r.segs));
+  const pos = (re) => built.findIndex((t) => re.test(t));
+  assert.ok(pos(/an older one\?/) > pos(/Refunds carry an idempotency key/) && pos(/an older one\?/) < pos(/Retries of a refund/), 'first in its group');
   fs.writeFileSync(annFile, saved);
   fs.rmSync(st0, { force: true });
 });

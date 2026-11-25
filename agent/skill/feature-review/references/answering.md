@@ -12,7 +12,9 @@ Each question comes as a prompt from fr:
 
 - `Where:` the place the reviewer stood when asking: a repository, file and line (`+12`
   the new side, `-9` a removed line, at the base), its hunk and group, the line's text,
-  or the note under the cursor. "This", "here" and "this line" mean that place. In fr's
+  or the note under the cursor. "This", "here" and "this line" mean that place. Asked on
+  text (a group's description, a part's note, the intent), fr shows the answer under that
+  paragraph, whatever it cites. In fr's
   overview, the place is a tab and the entry under the cursor (a design note, a name, a
   contract, a rollout step) with its text as the reviewer reads it: "this" means that
   entry. fr shows the answer under that entry; a `ref` is still welcome when the answer is
