@@ -598,6 +598,14 @@ test('a question on an answer: under it, a thread; the agent gets the answer as 
     await term.type('/', ...'A1 the check', '\r', '\x1b', 'A', ...'Q4 besides?', '\r');
     await sleep(50);
     assert.match(text(), /nothing else rejects a negative refund[^]*Q1 why\?[^]*A1 the check is gone[^]*Q2 and then\?[^]*A2 it pays out[^]*ASKED[^]*Q3 sure\?[^]*ASKED[^]*Q4 besides\?/);
+    // a thread on an answer under a group's text (its answer cites code elsewhere): there too
+    await term.type('/', ...'Retries of a refund', '\r', '\x1b', 'A', ...'T1 why retries?', '\r');
+    await sleep(50);
+    await answer(asked[4], 'T1 answer: clients retry.', { repo: 'refund-service', file: 'src/main/java/shop/refund/RefundService.java', lines: '5' });
+    await term.type('/', ...'T1 answer', '\r', '\x1b', 'A', ...'T2 which clients?', '\r');
+    await sleep(50);
+    assert.match(text(), /Retries of a refund[^]*T1 why retries\?[^]*T1 answer: clients retry[^]*ASKED[^]*T2 which clients\?[^]*RefundRequest gains/);
+    assert.equal(v.ui.rows.filter((r) => /T2 which clients/.test(plain(r.segs))).length, 1);
   } finally {
     fs.writeFileSync(annFile, saved);
     fs.rmSync(st0, { force: true });

@@ -176,7 +176,9 @@ function proseQa(ctx, rows, { group = undefined, head = [], width = ctx.width } 
   const out = [...rows];
   for (const end of [...at.keys()].sort((a, b) => b - a)) {
     const base = { ...(group !== undefined ? { group } : {}) };
-    const qa = at.get(end).filter(({ c }) => ctx.show.questions || ctx.revealed(c)).flatMap(({ c }) => calloutRows({ ...ctx, width }, c, base, 2));
+    // each with the thread under it
+    const rowsOf = (x) => [...(ctx.show.questions || ctx.revealed(x.c) ? calloutRows({ ...ctx, width }, x.c, base, 2) : []), ...x.thread.flatMap(rowsOf)];
+    const qa = at.get(end).flatMap(rowsOf);
     out.splice(end, 0, ...qa);
   }
   return out;
@@ -256,42 +258,53 @@ function context(ws, st, opts) {
       ? { key: `explain:${i}`, src: e, source: 'agent', layer: 'questions', about: 'agent:explanation', level: 'info', label: 'EXPLAINED', asked: q.id, question: String(e.question ?? q.question ?? '').trim(), text: e.answer ?? '', md: true }
       : { key: `asked:${q.id}`, asked: q.id, source: 'agent', layer: 'questions', pending: true, about: 'asked', level: 'info', label: 'ASKED', question: q.question, text: "waiting for the agent's answer (in its pane until then)", md: false };
   };
-  // asked on a note in the diff (a finding, an answer, fr's note): right under that note
+  // Where each question asked on a note or on text goes, in the order asked (an answer
+  // asked about is in its place by then: a thread goes on under it):
+  // - on a note in the diff (a finding, an answer, fr's note): right under that note;
+  // - on text, not a line of code (a group's header or why, a part's note, the intent):
+  //   under the paragraph asked on (proseQa), its thread under it.
+  // Its answer goes with it, whatever it cites.
   const noteUnit = new Map();
   for (const [u, list] of byUnit) for (const c of list) noteUnit.set(c.key, u);
-  const underNote = new Set();
-  for (const q of st.questions ?? []) {
-    if (!q.callout || q.ov || q.line != null || !noteUnit.has(q.callout)) continue;
-    // its answer, wherever its citation put it: here instead
+  const take = (q) => {
     let c = null;
     for (const [k, list] of byUnit) {
       const i = list.findIndex((x) => x.asked === q.id);
-      if (i >= 0) (c = list[i]), byUnit.set(k, list.filter((_, j) => j !== i));
+      if (i >= 0) (c = list[i]), byUnit.set(k, list.filter((_, j) => j !== i)), noteUnit.delete(c.key);
     }
-    c ??= qaCallout(q);
-    // (the questions in the order asked: an answer asked about is in its place by now, a thread)
-    const u = noteUnit.get(q.callout);
-    const list = byUnit.get(u) ?? [];
-    let at = list.findIndex((x) => x.key === q.callout);
-    if (at < 0) continue;
-    const note = list[at];
-    // after the questions already under it, and theirs
-    const below = new Set([q.callout]);
-    while (list[at + 1] && below.has(list[at + 1].under)) below.add(list[++at].key);
-    list.splice(at + 1, 0, { ...c, side: note.side, from: note.from, to: note.to, ...(note.place ? { place: note.place } : {}), under: q.callout });
-    noteUnit.set(c.key, u);
-    underNote.add(q.id);
-  }
-  // asked on text, not on a line of code (a group's header or why, a part's note, the intent,
-  // a note under a hunk): under the paragraph asked on, it and its answer (proseQa)
-  const prose = new Map();
+    return c ?? qaCallout(q);
+  };
+  const prose = new Map(); // the questions under text: {q, c, thread: [the same, under c]}
+  const underText = new Map(); // a note shown under text (its key) → its entry
   for (const q of st.questions ?? []) {
+    if (q.ov || q.line != null) continue;
+    if (q.callout && underText.has(q.callout)) {
+      const e = { q, c: take(q), thread: [] };
+      underText.get(q.callout).thread.push(e);
+      underText.set(e.c.key, e);
+      continue;
+    }
+    if (q.callout && noteUnit.has(q.callout)) {
+      const c = take(q);
+      const u = noteUnit.get(q.callout);
+      const list = byUnit.get(u) ?? [];
+      let at = list.findIndex((x) => x.key === q.callout);
+      if (at >= 0) {
+        const note = list[at];
+        // after the questions already under it, and theirs
+        const below = new Set([q.callout]);
+        while (list[at + 1] && below.has(list[at + 1].under)) below.add(list[++at].key);
+        list.splice(at + 1, 0, { ...c, side: note.side, from: note.from, to: note.to, ...(note.place ? { place: note.place } : {}), under: q.callout });
+        noteUnit.set(c.key, u);
+        continue;
+      }
+    }
     // (asked before fr kept the text: a group's go first in it)
-    if (underNote.has(q.id) || (!q.prose && !(q.group && !q.file && !q.hunk)) || q.line != null || q.ov) continue;
-    prose.set(q.id, { q, c: qaCallout(q) });
+    if (!q.prose && !(q.group && !q.file && !q.hunk)) continue;
+    const e = { q, c: take(q), thread: [] };
+    prose.set(q.id, e);
+    underText.set(e.c.key, e);
   }
-  // its answer shows there, not under a line it cites
-  for (const [u, list] of [...byUnit]) if (list.some((c) => c.asked && prose.has(c.asked))) byUnit.set(u, list.filter((c) => !(c.asked && prose.has(c.asked))));
   // a question just asked, and its answer, show whatever is hidden (h, a, f): the reader is waiting for them
   const reveal = opts.reveal ?? new Set();
   const revealed = (c) => Boolean(c.asked && reveal.has(c.asked));
