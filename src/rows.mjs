@@ -269,12 +269,17 @@ function context(ws, st, opts) {
       if (i >= 0) (c = list[i]), byUnit.set(k, list.filter((_, j) => j !== i));
     }
     c ??= qaCallout(q);
-    const list = byUnit.get(noteUnit.get(q.callout));
+    // (the questions in the order asked: an answer asked about is in its place by now, a thread)
+    const u = noteUnit.get(q.callout);
+    const list = byUnit.get(u) ?? [];
     let at = list.findIndex((x) => x.key === q.callout);
+    if (at < 0) continue;
     const note = list[at];
-    // after the questions already under it
-    while (list[at + 1]?.under === q.callout) at++;
+    // after the questions already under it, and theirs
+    const below = new Set([q.callout]);
+    while (list[at + 1] && below.has(list[at + 1].under)) below.add(list[++at].key);
     list.splice(at + 1, 0, { ...c, side: note.side, from: note.from, to: note.to, ...(note.place ? { place: note.place } : {}), under: q.callout });
+    noteUnit.set(c.key, u);
     underNote.add(q.id);
   }
   // asked on text, not on a line of code (a group's header or why, a part's note, the intent,

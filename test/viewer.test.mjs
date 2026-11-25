@@ -570,6 +570,41 @@ test('a question asked on a note in the diff (a finding): right under it, on scr
   }
 });
 
+test('a question on an answer: under it, a thread; the agent gets the answer as the place', async () => {
+  const st0 = path.join(dir, '.feature-review', 'state.json');
+  const annFile = path.join(dir, '.feature-review', 'annotations.json');
+  const saved = fs.readFileSync(annFile, 'utf8');
+  const asked = [];
+  try {
+    const { term, v } = await viewer({ rows: 60, cols: 130, layout: 'unified', env: { HERDR_PANE_ID: 'w:p1' }, askAgent: async (q) => (asked.push(q), { name: 'a', pane: 'p', started: false }) });
+    const text = () => v.ui.rows.map((r) => plain(r.segs)).join('\n');
+    const answer = async (q, a, ref) => {
+      const ann = JSON.parse(fs.readFileSync(annFile, 'utf8'));
+      ann.explanations.push({ asked: q.id, question: q.question, answer: a, ...(ref ? { ref } : {}) });
+      fs.writeFileSync(annFile, JSON.stringify(ann));
+      for (let i = 0; i < 40 && !text().includes(a); i++) await sleep(100);
+    };
+    await term.type('/', ...'nothing else rejects', '\r', '\x1b', 'A', ...'Q1 why?', '\r');
+    await sleep(50);
+    // the answer cites another file: still under the finding
+    await answer(asked[0], 'A1 the check is gone.', { repo: 'gateway', file: 'src/main/java/shop/gateway/RefundRequest.java', lines: '3' });
+    await term.type('/', ...'A1 the check', '\r', '\x1b', 'A', ...'Q2 and then?', '\r');
+    await sleep(50);
+    assert.match(asked[1].target.text, /Q1 why\?\nA1 the check is gone\./, 'the agent reads what it follows up');
+    await answer(asked[1], 'A2 it pays out.');
+    await term.type('/', ...'A2 it pays', '\r', '\x1b', 'A', ...'Q3 sure?', '\r');
+    await sleep(50);
+    // also a second question on the first answer: after the whole thread under it
+    await term.type('/', ...'A1 the check', '\r', '\x1b', 'A', ...'Q4 besides?', '\r');
+    await sleep(50);
+    assert.match(text(), /nothing else rejects a negative refund[^]*Q1 why\?[^]*A1 the check is gone[^]*Q2 and then\?[^]*A2 it pays out[^]*ASKED[^]*Q3 sure\?[^]*ASKED[^]*Q4 besides\?/);
+  } finally {
+    fs.writeFileSync(annFile, saved);
+    fs.rmSync(st0, { force: true });
+    await sleep(300);
+  }
+});
+
 test('p on a link to another part of the review: that part in the pane; ⏎ goes there, gt comes back', async () => {
   const annFile = path.join(dir, '.feature-review', 'annotations.json');
   const saved = fs.readFileSync(annFile, 'utf8');

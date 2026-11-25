@@ -43,7 +43,8 @@ itself), and the answer shows under that entry; in the Questions tab, about the 
 change. Asked on text rather than a line of code (a group's header or description, a
 part's note, the intent), the question and its answer show under the paragraph asked
 on; asked on a note in the diff (a finding, a test's intent, an answer), right under that
-note, whatever the answer cites. The question is written in the same multi-line field as a comment; fr sends it
+note, whatever the answer cites. Asked on an answer, the follow-up goes under it: a
+thread, which the agent reads as the place asked about. The question is written in the same multi-line field as a comment; fr sends it
 with the place (repository, file, line, hunk, group, the line's text or the note under
 the cursor) to an agent in a herdr pane beside fr. The first question opens that pane and
 starts the agent there (`agent.kind`, Pi by default) as the agent definition
