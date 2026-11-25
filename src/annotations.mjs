@@ -66,7 +66,7 @@ export function unitIds(ws) {
 
 // ---------- citations ----------
 
-const isRef = (x) => x && typeof x === 'object' && !Array.isArray(x) && (typeof x.hunk === 'string' || (typeof x.file === 'string' && x.lines !== undefined));
+export const isRef = (x) => x && typeof x === 'object' && !Array.isArray(x) && (typeof x.hunk === 'string' || (typeof x.file === 'string' && x.lines !== undefined));
 
 function parseLines(s) {
   const m = String(s).trim().match(/^(\d+)(?:\s*-\s*(\d+))?$/);

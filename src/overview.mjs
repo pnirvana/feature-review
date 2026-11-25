@@ -88,7 +88,7 @@ function qaRows(ctx, item, list = ctx.qa.get(item) ?? []) {
     rows.push(...text(question, 'bold'));
     if (!e) rows.push({ kind: 'text', segs: tint([["  waiting for the agent's answer (in its pane until then)", 'dim italic']]) });
     else if (str(e.answer)) rows.push({ kind: 'text', segs: tint([]) }, ...text(e.answer));
-    rows.slice(from).forEach((r) => !r.spacer && Object.assign(r, { item, asked: q.id, del: e ? `explain:${i}` : `asked:${q.id}` }));
+    rows.slice(from).forEach((r) => !r.spacer && Object.assign(r, { item, asked: q.id, del: e ? `explain:${i}` : `asked:${q.id}`, src: e ?? { question: q.question } }));
   }
   return rows;
 }
@@ -101,8 +101,8 @@ export const rowText = (r) => plain(r?.segs ?? []).replace(/\s+/g, ' ').trim();
  * paragraph (or other block) they were asked on, as in the diff under the line; at the end
  * of the entry when that text is gone.
  */
-function entry(ctx, rows, from, item) {
-  for (const r of rows.slice(from)) if (!r.spacer && r.item === undefined) r.item = item;
+function entry(ctx, rows, from, item, src = null) {
+  for (const r of rows.slice(from)) if (!r.spacer && r.item === undefined) Object.assign(r, { item, ...(src ? { src } : {}) });
   const at = new Map();
   for (const x of ctx.qa.get(item) ?? []) {
     let end = rows.length;
@@ -119,7 +119,7 @@ function design(ctx) {
   // how the change works as a whole, then type by type
   if (str(ctx.ann.overview)) {
     rows.push(heading([[' How it works', 'bold']], ctx.width), spacer(), ...md(ctx.ann.overview, ctx.width));
-    entry(ctx, rows, 0, 'design:overview');
+    entry(ctx, rows, 0, 'design:overview', { overview: ctx.ann.overview });
     rows.push(spacer(), spacer());
   }
   if (!list.length) return rows.length ? rows : empty('design notes');
@@ -154,7 +154,7 @@ function design(ctx) {
       }
     }
     if (str(d.opinion)) rows.push(spacer(), { kind: 'text', segs: [["  the agent's opinion", 'dim bold']] }, ...md(d.opinion, ctx.width, 4, 'italic'));
-    entry(ctx, rows, from, `design:${d.type ?? i}`);
+    entry(ctx, rows, from, `design:${d.type ?? i}`, d);
   });
   return rows;
 }
@@ -185,7 +185,7 @@ function names(ctx) {
     if (n?.ref) rows.push(...refRows(ctx, n.ref, { indent: 3 }));
     for (const c of Array.isArray(n?.codebase) ? n.codebase : []) rows.push(...(c?.ref ? refRows(ctx, c.ref, { indent: 3, label: `the codebase calls it ${c?.name ?? '?'}:` }) : []));
     if (str(n?.note)) rows.push(...md(n.note, ctx.width, 3));
-    entry(ctx, rows, from, `names:${n?.name ?? i}`);
+    entry(ctx, rows, from, `names:${n?.name ?? i}`, n);
   });
   return rows;
 }
@@ -220,7 +220,7 @@ function contracts(ctx) {
         if (str(x?.note)) rows.push(...md(x.note, ctx.width, 6));
       }
     }
-    entry(ctx, rows, from, `contracts:${c?.name ?? i}`);
+    entry(ctx, rows, from, `contracts:${c?.name ?? i}`, c);
   });
   return rows;
 }
@@ -233,7 +233,7 @@ function rollout(ctx) {
   if (order.length) {
     rows.push(heading([[' deploy in this order   ', 'bold'], ...order.flatMap((n, i) => [...(i ? [['  →  ', 'dim']] : []), [`${i + 1}. ${n}`, 'bold']])], ctx.width));
     if (str(ro.why)) rows.push(spacer(), ...md(ro.why, ctx.width));
-    entry(ctx, rows, 0, 'rollout:order');
+    entry(ctx, rows, 0, 'rollout:order', { why: ro.why });
   }
   const partial = Array.isArray(ro.partial) ? ro.partial : [];
   if (partial.length) {
@@ -253,7 +253,7 @@ function rollout(ctx) {
         ],
       });
       if (str(p?.effect)) rows.push(...md(p.effect, ctx.width, 4));
-      entry(ctx, rows, from, `rollout:partial:${i}`);
+      entry(ctx, rows, from, `rollout:partial:${i}`, p);
     });
   }
   const config = Array.isArray(ro.config) ? ro.config : [];
@@ -264,7 +264,7 @@ function rollout(ctx) {
       const from = rows.length;
       if (c?.ref) rows.push(...refRows(ctx, c.ref));
       if (str(c?.note)) rows.push(...md(c.note, ctx.width, 4));
-      entry(ctx, rows, from, `rollout:config:${i}`);
+      entry(ctx, rows, from, `rollout:config:${i}`, c);
     });
   }
   return rows.length ? rows : empty('rollout notes');
@@ -304,6 +304,7 @@ function questions(ctx) {
     else if (!q?.ov) rows.push({ kind: 'text', segs: [['  about the whole change', 'dim']] });
     if (str(e?.answer)) rows.push(spacer(), ...md(e.answer, ctx.width));
     tag(from, `explain:${i}`);
+    rows.slice(from).forEach((r) => !r.spacer && (r.src = e));
   });
   return rows;
 }

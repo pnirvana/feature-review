@@ -4,7 +4,7 @@
 // FR_BACKGROUND (light | dark | #rrggbb), else COLORFGBG, else dark.
 //
 // The result is applied to STYLE (src/md/term.mjs) as named styles, so rows keep using
-// names: band, bandalt, guide, guidealt, role, riskhigh, riskmedium, risklow, fact, factsoft, factbar, agent, agentsoft, agentbar, explain, asked, explainbar, explainband, markexplain, markfr, markagent, markcomment, the diff
+// names: band, bandalt, guide, rule, guidealt, role, riskhigh, riskmedium, risklow, fact, factsoft, factbar, agent, agentsoft, agentbar, explain, asked, explainbar, explainband, markexplain, markfr, markagent, markcomment, the diff
 // tints addbg, delbg, addword, delword, addfg, delfg, filler, and code and link for the
 // Markdown of annotations. It also picks bat's theme for a light or dark terminal.
 import { STYLE } from '../md/term.mjs';
@@ -97,6 +97,8 @@ export function makeStyles(colors) {
     band: bg(mix(c.bg, c.blue, 0.13 * k)),
     bandalt: bg(mix(c.bg, c.yellow, 0.16 * k)),
     guide: fg(mix(c.bg, c.blue, 0.75)),
+    // a pane's border (the peek's top line): the accent, a little toned down
+    rule: fg(mix(c.bg, c.blue, 0.85)),
     guidealt: fg(mix(c.bg, c.yellow, 0.8)),
     role: `1;${fg(c.blue)};${bg(mix(c.bg, c.blue, 0.18 * k))}`,
     riskhigh: `1;${fg(c.bg)};${bg(c.red)}`,

@@ -13,6 +13,7 @@ import { plain } from '../src/md/term.mjs';
 import { readFeedback } from '../src/feedback.mjs';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const rowText = (r) => plain(r?.segs ?? []).trim();
 
 /** A terminal of cols × rows: type() sends keys, screen() is what is shown now. */
 function fakeTerminal(cols = 110, rows = 24) {
@@ -76,7 +77,7 @@ async function viewer(opts = {}) {
   fs.rmSync(path.join(dir, '.feature-review', 'state.json'), { force: true });
   const term = fakeTerminal(opts.cols, opts.rows);
   let exited = null;
-  const v = await runViewer({ dir, layout: opts.layout ?? 'auto', feedbackFile: path.join(top, 'feedback.jsonl'), highlight: opts.highlight ?? 'none', hlBudget: opts.hlBudget, queryTheme: false, viMode: opts.viMode ?? false, env: opts.env ?? {}, askAgent: opts.askAgent, input: term.input, output: term.output, exit: (c) => (exited = c) });
+  const v = await runViewer({ dir, layout: opts.layout ?? 'auto', feedbackFile: path.join(top, 'feedback.jsonl'), highlight: opts.highlight ?? 'none', hlBudget: opts.hlBudget, editor: opts.editor ?? '', queryTheme: false, viMode: opts.viMode ?? false, env: opts.env ?? {}, askAgent: opts.askAgent, input: term.input, output: term.output, exit: (c) => (exited = c) });
   open.push(v);
   return { term, v, exited: () => exited };
 }
@@ -660,4 +661,125 @@ test('x deletes an answer the reviewer no longer needs, with its question: in th
   assert.doesNotMatch(term.screen()[0], /waiting/);
   assert.equal(readState(dir).questions.length, 0);
   fs.rmSync(st0, { force: true });
+});
+
+test('p peeks at the code a note points at, below, the review in place; n, +, =, esc', async () => {
+  const { term, v } = await viewer({ rows: 40, cols: 130, layout: 'unified' });
+  await term.type('/', ...'CALLER TO CHECK', '\r', '\x1b');
+  const at = { cur: v.ui.cur, top: v.ui.top };
+  await term.type('p');
+  await sleep(300);
+  const scr = () => term.screen().join('\n');
+  // the caller outside the feature first; the line the note sits under last
+  assert.match(scr(), /PEEK +1\/2 [ ─]+refund-service-seed\/src\/main\/java\/shop\/refund\/RefundService\.java:4-6 [ ─]+outside the feature/);
+  assert.match(scr(), /CALLER TO CHECK/, 'the note stays on screen');
+  assert.match(scr(), /▌ +4 +public void refund\(String orderId, long amount\)/, 'the cited lines marked');
+  assert.match(scr(), /peek: +j\/k move/);
+  assert.match(scr(), /^▌▌ +4 +public void refund/m, 'the cursor on the first cited line');
+  assert.match(term.where(), /peek: refund-service-seed\/src\/main\/java\/shop\/refund\/RefundService\.java:\+4/);
+  // the next one: the line in the change it is about
+  await term.type('n');
+  await sleep(200);
+  assert.match(scr(), /PEEK +2\/2 [ ─]+refund-service\/src\/main\/java\/shop\/refund\/RefundService\.java:4 [ ─]+in the change/);
+  // more around it, then all of the file
+  const rows = v.ui.peek.rows.length;
+  await term.type('+', '+', '+', '+');
+  assert.ok(v.ui.peek.rows.length >= rows);
+  assert.doesNotMatch(scr(), /lines (above|below) · \+ shows more/);
+  await term.type('=');
+  assert.match(term.screen()[1], /PEEK/, 'full screen');
+  await term.type('=', '\x1b');
+  assert.equal(v.ui.peek, null);
+  assert.deepEqual({ cur: v.ui.cur, top: v.ui.top }, at, 'back exactly where it was');
+});
+
+test('p: ⏎ goes to code in the change, gt comes back with the peek open; on a line of code: its notes', async () => {
+  const { term, v } = await viewer({ rows: 40, cols: 130, layout: 'unified' });
+  await term.type('/', ...'CALLER TO CHECK', '\r', '\x1b', 'p');
+  await sleep(300);
+  // outside the feature: no going there
+  await term.type('\r');
+  assert.match(term.screen().join('\n'), /outside the feature: o opens it in the editor/);
+  const back = rowText(v.ui.rows[v.ui.cur]);
+  await term.type('n');
+  await sleep(200);
+  await term.type('\r');
+  assert.equal(v.ui.peek, null);
+  assert.equal(v.ui.rows[v.ui.cur].line?.n, 4);
+  assert.match(term.screen().join('\n'), /RefundService\.java:4 +gt: back/);
+  await term.type('j', 'g', 't');
+  assert.equal(rowText(v.ui.rows[v.ui.cur]), back);
+  assert.ok(v.ui.peek, 'the peek open again');
+  assert.equal(v.ui.peek.i, 1);
+  await term.type('\x1b');
+  // on a line of code: its whole file, the cursor on that line, then what the notes under it cite
+  while (v.ui.rows[v.ui.cur].kind !== 'code') await term.type('k');
+  const line = v.ui.rows[v.ui.cur].line;
+  await term.type('p');
+  await sleep(300);
+  const pk = v.ui.peek;
+  assert.equal(pk.targets[0].here, true);
+  assert.equal(pk.context, Infinity);
+  assert.match(term.screen().join('\n'), /PEEK +1\/\d+ .*the line under the cursor · its whole file/);
+  const at = pk.rows[pk.cur];
+  assert.equal((line.side === 'old' ? at.at?.old : (at.at?.new ?? at.line)), line.n);
+  assert.ok(pk.targets.some((t) => t.repo === 'refund-service-seed'), 'the notes\' citations after it');
+  await term.type('\x1b');
+  // nothing cited
+  await term.type('g', 'g', 'p');
+  assert.match(term.screen().join('\n'), /nothing cited here/);
+});
+
+test('p: the types and members the prose names, found by name; in the overview, from a citation', async () => {
+  const { term, v } = await viewer({ rows: 40, cols: 130, layout: 'unified' });
+  await term.type('/', ...'gains', '\r', '\x1b', 'p');
+  await sleep(500);
+  const names = v.ui.peek.targets.filter((t) => t.how === 'found').map((t) => `${t.symbol} ${t.repo}/${path.basename(t.file)}:${t.from}`);
+  assert.ok(names.includes('RefundService.refund refund-service/RefundService.java:4'), names.join(', '));
+  assert.ok(names.some((n) => n.startsWith('RefundRequest gateway/RefundRequest.java')), names.join(', '));
+  assert.match(term.screen().join('\n'), /found by name/);
+  // on the row "1. RefundRequest gains idempotencyKey": that type first
+  assert.match(term.screen().join('\n'), /PEEK +1\/\d+ [ ─]+gateway\/src\/main\/java\/shop\/gateway\/RefundRequest\.java:\d+ .*found by name: RefundReq/);
+  await term.type('\x1b');
+  // on the next row, its name first
+  await term.type('/', ...'skips a key', '\r', '\x1b', 'p');
+  await sleep(500);
+  assert.match(term.screen().join('\n'), /PEEK +1\/\d+ [ ─]+refund-service\/src\/main\/java\/shop\/refund\/RefundService\.java:4 .*found by name: Refun/); // (the title is cut at the width)
+  assert.equal(v.ui.peek.targets[0].symbol, 'RefundService.refund');
+  await term.type('\x1b');
+  // the overview: on a consumer's citation, that one first
+  await term.type('m', '3');
+  while (!/refund-service-seed.*RefundService\.java:4/.test(plain(v.ui.ov.rows[v.ui.ov.cur].segs))) await term.type('j');
+  await term.type('p');
+  await sleep(300);
+  assert.match(term.screen().join('\n'), /PEEK +\d\/\d [ ─]+refund-service-seed\/src\/main\/java\/shop\/refund\/RefundService\.java:4 [ ─]+outside the feature/);
+  assert.ok(v.ui.ov, 'still in the overview');
+  await term.type('\x1b');
+  assert.equal(v.ui.peek, null);
+  assert.ok(v.ui.ov);
+});
+
+test('the peek has a cursor: j moves it, ⏎ goes to its line in the change, o opens its line', async () => {
+  const log = path.join(top, 'editor.log');
+  fs.rmSync(log, { force: true });
+  const { term, v } = await viewer({ rows: 40, cols: 130, layout: 'unified', editor: `printf '%s %s\\n' >> ${log}` });
+  await term.type('/', ...'CALLER TO CHECK', '\r', '\x1b', 'p');
+  await sleep(300);
+  await term.type('n');
+  await sleep(200);
+  // on the cited line; two down: line 6 of the new side
+  await term.type('j', 'j');
+  assert.match(term.where(), /peek: refund-service\/src\/main\/java\/shop\/refund\/RefundService\.java:\+6/);
+  assert.match(term.screen().join('\n'), /^▌ +5 +6 +ledger\.book/m);
+  await term.type('o');
+  assert.match(fs.readFileSync(log, 'utf8'), /^\+6 .*refund-service\/src\/main\/java\/shop\/refund\/RefundService\.java$/m);
+  await term.type('\r');
+  assert.equal(v.ui.peek, null);
+  assert.deepEqual(v.ui.rows[v.ui.cur].line, { side: 'new', n: 6 });
+  // back, the peek's cursor where it was
+  await term.type('g', 't');
+  assert.match(term.where(), /RefundService\.java:\+6/);
+  // + keeps the cursor on its line
+  await term.type('+');
+  assert.match(term.where(), /RefundService\.java:\+6/);
 });

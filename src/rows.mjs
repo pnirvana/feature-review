@@ -293,7 +293,7 @@ function noteRows(ctx, { kind, x, res }, base) {
     }
   }
   const about = `agent:${kind}${kind === 'ghost' && x?.status ? `:${x.status}` : kind === 'finding' && x?.kind ? `:${x.kind}` : ''}`;
-  return [spacer(base), ...body.map((r) => ({ ...r, callout: `note:${kind}`, about, segs: [['  ', ''], ['┃ ', bar], ...r.segs] }))];
+  return [spacer(base), ...body.map((r) => ({ ...r, callout: `note:${kind}`, about, src: x, segs: [['  ', ''], ['┃ ', bar], ...r.segs] }))];
 }
 
 /** The notes placed under a unit, once per view (a hunk shown in two groups gets them the first time). */
@@ -396,7 +396,7 @@ function calloutBody(ctx, c, base, indent) {
   const badge = q ? (c.pending ? 'asked' : 'explain') : fr ? (c.level === 'info' ? 'factsoft' : 'fact') : c.level === 'info' ? 'agentsoft' : 'agent';
   const w = Math.max(20, ctx.width - indent - 2);
   const open = c.expand && ctx.fold.get(`x:${c.key}`) === false;
-  const meta = { kind: 'note', ...base, callout: c.key, about: c.about, ...(c.expand ? { expand: `x:${c.key}` } : {}) };
+  const meta = { kind: 'note', ...base, callout: c.key, about: c.about, ...(c.expand ? { expand: `x:${c.key}` } : {}), ...(c.src ? { src: c.src } : {}) };
   const pre = [[' '.repeat(indent), ''], ['┃ ', bar]];
   const head = [[` ${c.label} `, badge]];
   // folded (space): one line that says there is more
@@ -779,11 +779,11 @@ function groupsLens(ctx) {
       ...(g.requested === 'no' ? [['     not requested', 'yellow bold']] : g.requested === 'unclear' ? [['     requested?', 'yellow']] : []),
       ...(verified ? [['     ', ''], [' MECHANICAL ', 'fact'], [' verified by fr', 'dim']] : g.mechanical ? [[`     claimed mechanical: ${unverified} of ${plural(units.length, 'hunk')} not verified`, 'yellow']] : []),
     ];
-    rows.push(...groupHead(ctx, { gid, n: gi + 1, title: g.title ?? gid, folded, units, meta, bg: BAND.group }));
+    rows.push(...groupHead(ctx, { gid, n: gi + 1, title: g.title ?? gid, folded, units, meta, bg: BAND.group }).map((r) => ({ ...r, src: g })));
     if (folded) return;
     const body = [];
     if (g.why || g.mechanical) body.push(spacer(base));
-    if (g.why) body.push(...mdRows(g.why, inner.width, base));
+    if (g.why) body.push(...mdRows(g.why, inner.width, { ...base, src: { why: g.why } }));
     if (g.mechanical) {
       if (g.why) body.push(spacer(base));
       body.push({ kind: 'note', ...base, segs: [['mechanical, the agent says:', 'yellow bold']] });
@@ -797,6 +797,7 @@ function groupsLens(ctx) {
       body.push({
         kind: 'part',
         ...pbase,
+        src: p,
         units: res?.ok ? res.units : [],
         segs: [
           ...(p?.role ? [[` ${p.role.toUpperCase()} `, ROLE], ['  ', '']] : []),
@@ -805,7 +806,7 @@ function groupsLens(ctx) {
           ...(f?.dirty ? [['  ● uncommitted', 'yellow']] : []),
         ],
       });
-      if (p?.note) body.push(...mdRows(p.note, inner.width, pbase, { extra: 'dim' }));
+      if (p?.note) body.push(...mdRows(p.note, inner.width, { ...pbase, src: p }, { extra: 'dim' }));
       if (f) body.push(...fileSignalRows(ctx, f, { folded: false, base: pbase }));
       if (res && !res.ok) body.push({ kind: 'note', ...pbase, segs: [[`does not resolve: ${res.error}`, 'red']] });
       if (!res?.ok) continue;
@@ -883,12 +884,12 @@ export function buildRows(ws, st, { width = 120, layout = 'auto', fold = new Map
   // what the feature is for (Markdown), in either lens
   if (ann?.ann?.intent) {
     top.push(spacer(), spacer(), { kind: 'note', segs: [['Intent', 'bold']] });
-    top.push(...mdRows(ann.ann.intent, width - 2, {}).map((r) => ({ ...r, segs: [['  ', ''], ...r.segs] })));
+    top.push(...mdRows(ann.ann.intent, width - 2, { src: { intent: ann.ann.intent } }).map((r) => ({ ...r, segs: [['  ', ''], ...r.segs] })));
   }
   // how the change works as a whole (Markdown, figures welcome): before any code
   if (ann?.ann?.overview && ctx.show.agent) {
     top.push(spacer(), spacer(), { kind: 'note', about: 'agent:overview', segs: [['How it works', 'bold']] });
-    top.push(...mdRows(ann.ann.overview, width - 2, {}).map((r) => ({ ...r, about: 'agent:overview', segs: [['  ', ''], ...r.segs] })));
+    top.push(...mdRows(ann.ann.overview, width - 2, { src: { overview: ann.ann.overview } }).map((r) => ({ ...r, about: 'agent:overview', segs: [['  ', ''], ...r.segs] })));
   }
   top.push(spacer(), spacer());
   return [...top, ...body];

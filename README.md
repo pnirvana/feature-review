@@ -189,6 +189,7 @@ explain what fr has verified.
 | `space` `z` `Z` | fold the hunk (on a note: the note, to one line, counted in the header) · the file or group · all of them |
 | `c` · `e` · `x` | comment on the line (on a file line: the file) · edit · delete (`x` on an answer or a waiting question: delete it, twice) |
 | `o` | open the line in `$EDITOR` |
+| `p` | peek at the code a note points at, in a pane below; see "Peeking at what a note cites" |
 | `A` | ask the agent beside fr about the line under the cursor (in the overview: the entry under it; in the Questions tab: the whole change); see "Asking while you review" |
 | `!` | feedback on what is under the cursor: `h` helped · `m` missing here · `w` wrong, then an optional note |
 | `s` · `r` · `/` · `?` · `q` | side by side ↔ inline · reload · search as you type (⏎ keeps the match, esc goes back) · help · quit |
@@ -197,6 +198,41 @@ Reviewed hunks and files fold away. A mark is keyed by the hunk's repository, fi
 changed lines, so it survives a rebase and resets when the hunk changes. A comment
 follows its line when the code around it moves, and shows as outdated when the line is
 gone. Marks and comments are in `<dir>/.feature-review/state.json`.
+
+### Peeking at what a note cites
+
+Notes name other code all the time: the caller a ghost is about, a contract's
+consumers, a precedent, the types an answer talks about. `p` on a note shows that code in
+a pane over the lower part of the screen; the note and the diff above it stay where they
+are. On a line of code, `p` shows that line's whole file, the change in place and the
+cursor on the line (to read the code around a hunk without leaving it; `-` narrows it),
+then what the notes under the line cite; in the overview,
+at what the entry under the cursor cites (on a citation's own row: that one first).
+
+What a note points at, in this order: first what the row under the cursor names, in the
+order it stands on the row (put the cursor on the line of the text that names it), then the note's citations (as `fr
+check` resolved them), the files its text names (`helm/values.yaml`,
+`RefundService.java:12`), and the types, methods and fields it names
+(`RefundService.refund`, `IdempotencyKey`, `refundable`), found by their declaration with
+`git grep` and marked "found by name": a guess, though one that exists. The code the note
+already sits under comes last; when that is all there is, fr says so. When there is more
+than one place, a line under the pane's title lists them, numbered, the one shown marked:
+a row has no column cursor, so `p` starts on the first and the digit picks another.
+
+The pane shows the file around the cited lines, marked in the gutter. A file in the
+change shows with the change in place, its removed lines among the others, and code at
+the base or outside the feature says so. The pane has a cursor of its own, starting on
+the cited lines (the review's stays marked, dim); the footer says where it is.
+
+| in the peek | |
+|---|---|
+| `j` `k` · `ctrl-d` `ctrl-u` · `gg` `G` | move the cursor, the pane scrolling with it |
+| `n` `N` · `1`-`9` | the next / previous place the note points at · the one with that number in the list |
+| `+` `-` | more / less around it, up to the whole file (the cursor stays on its line) |
+| `=` | full screen, or back |
+| `⏎` | go to the cursor's line in the review (when it is in the change); `gt` comes back to where you were, the peek open again |
+| `o` | open the cursor's line in `$EDITOR` (code at the base: a read-only copy) |
+| `esc` `p` | close it: you are where you were |
 
 ### Feedback: does fr earn its place?
 

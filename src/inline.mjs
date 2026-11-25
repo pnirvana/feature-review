@@ -56,6 +56,7 @@ export function collectCallouts(ws, ann) {
     const r = res(g.ref);
     add(unitFor(b), {
       key: `ghost:${i}`,
+      src: g,
       source: 'agent',
       about: `agent:ghost${g.status ? `:${g.status}` : ''}`,
       level: g.status === 'ok' ? 'info' : 'warn',
@@ -75,7 +76,7 @@ export function collectCallouts(ws, ann) {
       const r = (Array.isArray(f?.refs) ? f.refs : []).map(res).find(inChange);
       if (!r) return;
       inlined.add(f);
-      add(unitFor(r), { key: `flag:${i}:${j}`, source: 'agent', about: `agent:test-flag${f?.kind ? `:${f.kind}` : ''}`, level: 'warn', label: human(f.kind), text: f.note ?? '', md: true, ...span(r) });
+      add(unitFor(r), { key: `flag:${i}:${j}`, src: f, source: 'agent', about: `agent:test-flag${f?.kind ? `:${f.kind}` : ''}`, level: 'warn', label: human(f.kind), text: f.note ?? '', md: true, ...span(r) });
     }),
   );
 
@@ -83,7 +84,7 @@ export function collectCallouts(ws, ann) {
     const r = res(f?.ref);
     if (!inChange(r)) return;
     inlined.add(f);
-    const c = { key: `finding:${i}`, source: 'agent', about: `agent:finding${f?.kind ? `:${f.kind}` : ''}`, level: f.severity === 'low' ? 'info' : 'warn', label: human(f.kind || 'finding'), md: true };
+    const c = { key: `finding:${i}`, src: f, source: 'agent', about: `agent:finding${f?.kind ? `:${f.kind}` : ''}`, level: f.severity === 'low' ? 'info' : 'warn', label: human(f.kind || 'finding'), md: true };
     add(unitFor(r), { ...c, text: f.note ?? '', ...span(r) });
     // the other lines the same problem shows at: marked, with a pointer to the finding
     (Array.isArray(f.also) ? f.also : []).map(res).forEach((a, j) => {
@@ -96,7 +97,7 @@ export function collectCallouts(ws, ann) {
     const r = e?.ref ? res(e.ref) : null;
     if (!inChange(r)) return;
     inlined.add(e);
-    add(unitFor(r), { key: `explain:${i}`, source: 'agent', layer: 'questions', about: 'agent:explanation', level: 'info', label: 'EXPLAINED', ...(e.asked ? { asked: String(e.asked) } : {}), question: String(e.question ?? '').trim(), text: e.answer ?? '', md: true, ...span(r) });
+    add(unitFor(r), { key: `explain:${i}`, src: e, source: 'agent', layer: 'questions', about: 'agent:explanation', level: 'info', label: 'EXPLAINED', ...(e.asked ? { asked: String(e.asked) } : {}), question: String(e.question ?? '').trim(), text: e.answer ?? '', md: true, ...span(r) });
   });
   return { byUnit, inlined };
 }

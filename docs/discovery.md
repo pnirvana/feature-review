@@ -353,6 +353,15 @@ place (collected while reading, answered in one go).
 - **Who runs the agent:** a separate command writes the annotation file; the viewer reads
   it and reloads when it changes. The agent in a herdr pane answering questions: §12 step 5.
 - **Front end:** a terminal UI first. Neovim may come later over the same data.
+- **Reading cited code without leaving the place** (2026-11-24): notes cite other code
+  (callers, consumers, precedent) and name types in prose, and reading it meant jumping
+  away or expanding it inline, which pushed the review down. Decided: a peek pane (`p`),
+  as an IDE's "peek definition": over the lower part of the screen, the diff left as it
+  was, `esc` back exactly there; `⏎` goes into the change with `gt` back. What a note
+  points at: its citations, then files its prose names, then types and members found by
+  their declaration with `git grep` (marked as found by name). Rejected: expanding inline
+  as the main way (grows with every citation), jumping (loses the place), the editor
+  alone (another tool; kept as `o` from the peek).
 - **Glossary:** the code is the single source of truth. The names list (§8) compares
   names against what the existing code already calls the same thing. Whether a
   maintained glossary is worth it is undecided; if so, it is a separate project.

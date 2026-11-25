@@ -17,6 +17,8 @@ import { ESC, fit, plain, charWidth, strWidth, segsWidth, hasBg } from './md/ter
 import { feedbackPath, recordFeedback, aboutRow } from './feedback.mjs';
 import { textField, keyField, fieldText, fieldRows, fieldMode } from './ui/textfield.mjs';
 import { askAgent as askHerdrAgent, inHerdr, writeCursor } from './agent.mjs';
+import os from 'node:os';
+import { targetsFor, peekLines, peekRows, peekTitle, peekChoices, forgetFiles } from './peek.mjs';
 
 
 const HELP = [
@@ -36,6 +38,12 @@ const HELP = [
   'c               comment on the line under the cursor (on a file or hunk line: the file)',
   'e x             on a comment: edit it / delete it (x twice); x on an answer or a question: delete it',
   'o               open the line in $EDITOR',
+  'p               peek: the code a note points at (its citations, files and types named in it), in a pane',
+  '                below; on a line of code: its whole file, the change in place, then what the notes under it cite.',
+  '                In the pane, a cursor of its own: j/k move',
+  '                n N or 1-9 another place (the list under its title)  + - more / less around it  = full screen  ⏎ go to its line (in the change)',
+  '                o its line in the editor  esc close',
+  'gt              after ⏎ in the peek: back to where you were, the peek open again',
   'A               ask the agent beside fr about the line under the cursor (in the overview: the whole change);',
   '                it answers in its pane and in the review: under the line, marked EXPLAINED (ASKED until then)',
   'space           on a note (a finding, an answer): fold it to one line, or open it; the header counts them',
@@ -177,6 +185,7 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
       await loadAnnotations(ws);
       watchAnnotations(ws.root);
       ui.hl = new Map(); // plain until highlighted: old highlighting may not match the new text
+      forgetFiles();
       hlNew();
       ui.ws = ws;
       ui.error = null;
@@ -291,8 +300,9 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
     const l = r.line && typeof r.line === 'object' ? `:${r.line.side === 'old' ? '-' : '+'}${r.line.n}` : '';
     return `${x.repo.name}/${x.f.file}${l}`;
   }
-  const KEYS = 'tab lens  m overview  a annotations  f markers  j/k move  ]] file  ]u not reviewed  v reviewed  space fold  c comment  h hide notes  A ask  ! feedback  o editor  s layout  / search  ? help  q quit';
-  const OV_KEYS = 'h/l or 1-5 tab  j/k move  ⏎ to the code  A ask  x delete (Questions)  m/esc back to the review  q quit';
+  const KEYS = 'tab lens  m overview  a annotations  f markers  j/k move  ]] file  ]u not reviewed  v reviewed  space fold  c comment  h hide notes  p peek  A ask  ! feedback  o editor  s layout  / search  ? help  q quit';
+  const PEEK_KEYS = 'peek:  j/k move  n/N or 1-9 another place  + - more / less around it  = full screen  ⏎ go to this line  o editor  esc close';
+  const OV_KEYS = 'h/l or 1-5 tab  j/k move  ⏎ to the code  p peek  A ask  x delete (Questions)  m/esc back to the review  q quit';
   function footer() {
     const w = W();
     if (ui.input) {
@@ -318,6 +328,12 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
       const item = (k, i) => [[`  ${i + 1} `, 'bold'], [LAYER_NAMES[k], ui.show[k] ? '' : 'dim'], [ui.show[k] ? ' ✓' : ' ·', ui.show[k] ? 'green' : 'dim']];
       return [[[' show:', 'bold yellow'], ...LAYERS.flatMap(item), ['     0 all · f / esc done', 'dim']], [[' ', ''], ['each number shows or hides that kind of marker: its notes and its marks', 'gray']]];
     }
+    if (ui.peek) {
+      const msg = ui.flash && ui.flash.until > Date.now() ? [[' ' + ui.flash.msg, ui.flash.style]] : [[' ' + PEEK_KEYS, 'dim']];
+      const t = ui.peek.targets[ui.peek.i];
+      const l = peekLine(t, ui.peek.rows[ui.peek.cur]);
+      return [msg, [[' ', ''], [l ? `peek: ${t.repo}/${t.file}:${l.side === 'old' ? '-' : '+'}${l.n}` : '', 'gray']]];
+    }
     if (ui.ov) {
       const msg = ui.flash && ui.flash.until > Date.now() ? [[' ' + ui.flash.msg, ui.flash.style]] : [[' ' + OV_KEYS, 'dim']];
       const r = ui.ov.rows[ui.ov.cur];
@@ -340,9 +356,13 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
     const h = H();
     const head = [header()];
     const foot = footer();
-    const bodyH = Math.max(1, h - head.length - foot.length);
+    const fullH = Math.max(1, h - head.length - foot.length);
+    // the peek takes the lower part (all of it at =): what is above stays as it was
+    const peekH = ui.peek && !ui.help ? peekHeight() : 0;
+    const bodyH = Math.max(1, fullH - peekH);
     let body;
-    if (ui.help) body = HELP.map((l, i) => [[' ' + l, i === 0 ? 'bold' : '']]);
+    if (peekH && ui.peek.full) body = [];
+    else if (ui.help) body = HELP.map((l, i) => [[' ' + l, i === 0 ? 'bold' : '']]);
     else if (ui.error) body = [[[` ${ui.error}`, 'red']], [['  r: try again · q: quit', 'dim']]];
     else if (!ui.ws) body = [[[' reading the worktrees…', 'dim']]];
     else if (ui.ov) {
@@ -351,7 +371,7 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
       if (o.cur < o.top) o.top = o.cur;
       if (o.cur >= o.top + n) o.top = o.cur - n + 1;
       o.top = Math.max(0, Math.min(o.top, Math.max(0, o.rows.length - n)));
-      body = [[], ...o.rows.slice(o.top, o.top + n).map((r, i) => [...(o.top + i === o.cur ? [['▌', 'cyan bold']] : [[' ', '']]), [' ', ''], ...r.segs])];
+      body = [[], ...o.rows.slice(o.top, o.top + n).map((r, i) => [...(o.top + i === o.cur ? [['▌', ui.peek ? 'dim' : 'cyan bold']] : [[' ', '']]), [' ', ''], ...r.segs])];
     } else {
       if (ui.cur < ui.top) ui.top = ui.cur;
       if (ui.cur >= ui.top + bodyH) ui.top = ui.cur - bodyH + 1;
@@ -359,13 +379,15 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
       const hits = new Set(ui.search?.hits ?? []);
       body = ui.rows.slice(ui.top, ui.top + bodyH).map((r, i) => {
         const idx = ui.top + i;
-        const g = idx === ui.cur ? [['▌', 'cyan bold']] : hits.has(idx) ? [['›', 'yellow']] : [[' ', '']];
+        // while the peek is open, it has the cursor: the review's stays marked, dim
+        const g = idx === ui.cur ? [['▌', ui.peek ? 'dim' : 'cyan bold']] : hits.has(idx) ? [['›', 'yellow']] : [[' ', '']];
         const segs = hits.has(idx) && ui.search ? markMatches(r.segs, ui.search.q, idx === ui.cur) : r.segs;
-        return idx === ui.cur ? cursorLine([...g, [' ', ''], ...segs], w) : [...g, [' ', ''], ...segs];
+        return idx === ui.cur && !ui.peek ? cursorLine([...g, [' ', ''], ...segs], w) : [...g, [' ', ''], ...segs];
       });
     }
-    const lines = [...head, ...body.slice(0, bodyH)];
-    while (lines.length < head.length + bodyH) lines.push([]);
+    const lines = [...head, ...body.slice(0, peekH && ui.peek.full ? 0 : bodyH)];
+    while (lines.length < head.length + fullH - peekH) lines.push([]);
+    if (peekH) lines.push(...peekBody(peekH, w));
     lines.push(...foot);
     out.write(`${ESC}H` + lines.map((l) => fit(l, w) + `${ESC}K`).join('\r\n') + `${ESC}J`);
     highlightNear();
@@ -621,6 +643,7 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
     else if (/^[1-9]$/.test(k) && TABS[Number(k) - 1]) ovTab(TABS[Number(k) - 1].id);
     else if (k === '\r') return void (ovEnter(), draw());
     else if (k === 'A') return startAsk();
+    else if (k === 'p') return void openPeek();
     else if (k === 'x' && ui.ov.rows[ui.ov.cur]?.del) return deleteAnswer(ui.ov.rows[ui.ov.cur].del, () => ui.cur);
     else if (k === 'm' || k === '\x1b') (ui.lastTab = ui.ov.tab), (ui.ov = null);
     else if (k === 'q') return quit();
@@ -1133,12 +1156,251 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
     let line = 1;
     if (r.line && typeof r.line === 'object') line = r.line.side === 'new' ? r.line.n : (x.f.hunks.find((h) => h.key === r.hunk)?.newStart ?? 1);
     else if (r.hunk) line = x.f.hunks.find((h) => h.key === r.hunk)?.newStart ?? 1;
+    runEditor(path.join(x.repo.dir, x.f.file), line);
+  }
+  function runEditor(file, line) {
     const cmd = editor || 'vi';
     out.write(`${ESC}?2004l${ESC}?25h${ESC}?1049l`);
     if (input.isTTY) input.setRawMode(false);
-    spawnSync('sh', ['-c', `${cmd} "$@"`, 'sh', `+${line}`, path.join(x.repo.dir, x.f.file)], { stdio: 'inherit' });
+    spawnSync('sh', ['-c', `${cmd} "$@"`, 'sh', `+${line}`, file], { stdio: 'inherit' });
     if (input.isTTY) input.setRawMode(true);
     out.write(`${ESC}?1049h${ESC}?25l${ESC}?2004h${ESC}2J`);
+    draw();
+  }
+
+  // ---------- peek (p): the code a note points at, below, without leaving the place ----------
+  /** What the row under the cursor points at: its note's item; on a line of code, the notes under it. */
+  function peekSource() {
+    // the row's own text, and the start of the next row of the same note (a path wrapped there)
+    const rowOf = (rows, i) => {
+      const t = plain(rows[i]?.segs ?? []).trim();
+      const next = rows[i + 1];
+      const cont = next && next.src === rows[i].src ? (plain(next.segs).trim().split(/\s+/)[0] ?? '') : '';
+      return [t, `${t}${cont}`, `${t} ${cont}`];
+    };
+    if (ui.ov) {
+      const r = ui.ov.rows[ui.ov.cur];
+      return { src: r?.src ?? null, first: r?.ref ?? null, row: r?.src && !r.ref ? rowOf(ui.ov.rows, ui.ov.cur) : null };
+    }
+    const r = ui.rows[ui.cur];
+    if (r?.src) return { src: r.src, first: null, row: rowOf(ui.rows, ui.cur) };
+    if (r?.kind === 'code') {
+      const under = [];
+      for (let i = ui.cur + 1; i < ui.rows.length && !['code', 'hunk', 'file', 'part', 'group'].includes(ui.rows[i].kind); i++) if (ui.rows[i].src && !under.includes(ui.rows[i].src)) under.push(ui.rows[i].src);
+      return { src: under.length ? under : null, first: null, here: hereTarget(r) };
+    }
+    return { src: null, first: null };
+  }
+  /** A line of the diff as a peek target: its whole file, the change in place, the cursor on it. */
+  function hereTarget(r) {
+    const x = r.fid && fileById(r.fid);
+    if (!x || !r.line || typeof r.line !== 'object') return null;
+    const old = r.line.side === 'old';
+    return { how: 'here', here: true, named: 'this line', repo: x.repo.name, dir: x.repo.dir, file: old ? (x.f.old ?? x.f.file) : x.f.file, side: old ? 'old' : 'new', rev: old ? x.repo.base : null, from: r.line.n, to: r.line.n, units: r.hunk ? [r.hunk] : [] };
+  }
+  async function openPeek(at = null) {
+    const { src, first, row = null, here = null } = at ?? peekSource();
+    // on a line of the diff: its whole file first, then what the notes under it cite
+    if (here && !src) return showPeek([here], 0, { src, first, here }, Infinity);
+    if (!src && !first) return flash(ui.ov ? 'nothing cited here' : 'nothing cited here: p works on a note, or a line of code', 'dim');
+    const ws = ui.ws;
+    const fail = (e) => (flash(`peek: ${e.message}`, 'red'), { targets: null });
+    // the citations and the files named first; the names found by git grep join when found
+    let { targets, at: i } = await targetsFor(ws, ui.ann, src ?? first, { first, row, names: false }).catch(fail);
+    const all = targetsFor(ws, ui.ann, src ?? first, { first, row }).catch(fail);
+    if (targets && !targets.length) ({ targets, at: i } = await all);
+    if (!targets || ui.ws !== ws) return;
+    const key = (t) => `${t.repo}|${t.file}|${t.side}|${t.from ?? ''}`;
+    // the line itself is there already
+    if (here) targets = targets.filter((t) => key(t) !== key(here));
+    if (!targets.length && !here) return flash('nothing here points at code fr can find', 'dim');
+    // what the row names first; the code the note sits under is on screen already: last
+    const hunk = !ui.ov && !first ? ui.rows[ui.cur]?.hunk : null;
+    const rank = (t) => (t.here ? -1 : t.row ? 0 : hunk && t.units.includes(hunk) ? 2 : 1);
+    if (!first) {
+      targets.sort((a, b) => rank(a) - rank(b));
+      i = 0;
+    }
+    if (here) targets.unshift(here);
+    const p = await showPeek(targets, i, { src, first, here }, here ? Infinity : 8);
+    const more = (await all).targets?.filter((t) => !here || key(t) !== key(here));
+    if (ui.peek !== p) return;
+    // only the code it sits under: say so, it is not a fault (not on a line: that is what was asked)
+    if (!here && (more ?? p.targets).every((t) => rank(t) === 2)) flash('this note cites only the code it is under; its text names nothing else fr can find', 'dim');
+    if (!more || more.length <= p.targets.length - (here ? 1 : 0)) return;
+    // the same places stay the same objects (their code is read already), the new ones after
+    const have = new Set(p.targets.map(key));
+    p.targets.push(...more.filter((t) => !have.has(key(t))));
+    draw();
+  }
+  /** Opens the pane on targets[i]; context: lines around it (Infinity: the whole file). */
+  async function showPeek(targets, i, src, context = 8) {
+    const p = (ui.peek = { targets, i, context, full: false, top: 0, rows: [], cache: new Map(), src, back: { top: ui.top, ovTop: ui.ov?.top ?? null } });
+    await peekLoad();
+    return p;
+  }
+  async function peekLoad() {
+    const p = ui.peek;
+    const t = p.targets[p.i];
+    if (!p.cache.has(t)) {
+      peekLayout();
+      draw();
+      p.cache.set(t, await peekLines(ui.ws, t).catch((e) => ({ error: e.message })));
+    }
+    if (ui.peek !== p) return;
+    peekLayout(true);
+    draw();
+  }
+  const CONTEXTS = [3, 8, 20, 50, Infinity];
+  /** The line a peek row shows: {side, n} (a removed line: the base side), or null. */
+  const peekLine = (t, r) => {
+    if (!r) return null;
+    if (typeof r.line === 'number') return { side: t.side, n: r.line };
+    const side = t.side === 'old' ? 'old' : 'new';
+    if (r.at?.[side] != null) return { side, n: r.at[side] };
+    if (r.at?.old != null) return { side: 'old', n: r.at.old };
+    if (r.at?.new != null) return { side: 'new', n: r.at.new };
+    return null;
+  };
+  /** Lay the pane out; focus: the cursor on the cited lines, else on the line it was on. */
+  function peekLayout(focus = false) {
+    const p = ui.peek;
+    const t = p.targets[p.i];
+    const got = p.cache.get(t);
+    if (!got || got.error) {
+      p.rows = [{ segs: [[got ? `  ${got.error}` : '  reading…', got ? 'red' : 'dim']] }];
+      p.top = p.cur = 0;
+      return;
+    }
+    const was = focus ? null : peekLine(t, p.rows[p.cur]);
+    const { rows, focus: f, clipped } = peekRows(got.lines, t, { width: W() - 2, context: p.context });
+    const more = (n, where) => (n ? [{ segs: [[`  ⋮ ${n} line${n === 1 ? '' : 's'} ${where} · + shows more`, 'dim']] }] : []);
+    const off = p.rows.length && !focus ? p.cur - p.top : 2;
+    p.rows = [...more(clipped.above, 'above'), ...rows, ...more(clipped.below, 'below')];
+    const same = was ? p.rows.findIndex((r) => { const l = peekLine(t, r); return l && l.side === was.side && l.n === was.n; }) : -1;
+    p.cur = same >= 0 ? same : f + (clipped.above ? 1 : 0);
+    p.top = Math.max(0, p.cur - off);
+  }
+  /** Moves the peek's cursor, the pane scrolling with it. */
+  function peekMove(d, h) {
+    const p = ui.peek;
+    p.cur = Math.max(0, Math.min(p.rows.length - 1, p.cur + d));
+    if (p.cur < p.top) p.top = p.cur;
+    if (p.cur >= p.top + h) p.top = p.cur - h + 1;
+  }
+  /** The pane's height, and that of its code (less the title and the list of places). */
+  function peekHeight() {
+    const fullH = Math.max(1, H() - 3);
+    return ui.peek.full ? fullH : Math.max(6, Math.min(fullH - 4, Math.round(fullH * 0.45)));
+  }
+  const peekCodeH = () => Math.max(1, peekHeight() - 1 - (ui.peek.targets.length > 1 ? 1 : 0));
+  function peekBody(n, w) {
+    const p = ui.peek;
+    const t = p.targets[p.i];
+    const choices = peekChoices(p.targets, p.i, w);
+    const h = Math.max(1, n - 1 - (choices ? 1 : 0));
+    p.top = Math.max(0, Math.min(p.top, Math.max(0, p.rows.length - h)));
+    if (p.cur < p.top) p.top = p.cur;
+    if (p.cur >= p.top + h) p.top = p.cur - h + 1;
+    const rows = p.rows.slice(p.top, p.top + h).map((r, i) => (p.top + i === p.cur ? cursorLine([['▌', 'cyan bold'], ...r.segs], w) : [[' ', ''], ...r.segs]));
+    while (rows.length < h) rows.push([]);
+    return [peekTitle(t, p.i, p.targets.length, w), ...(choices ? [choices] : []), ...rows];
+  }
+  function closePeek() {
+    const p = ui.peek;
+    ui.peek = null;
+    if (!p) return;
+    // the rows above were only covered: they are where they were
+    ui.top = p.back.top;
+    if (ui.ov && p.back.ovTop != null) ui.ov.top = p.back.ovTop;
+  }
+  function peekKey(k) {
+    const p = ui.peek;
+    const t = p.targets[p.i];
+    const h = peekCodeH();
+    const pend = ui.pending;
+    ui.pending = '';
+    if (pend === 'g' && k === 'g') peekMove(-p.rows.length, h);
+    else if (k === 'g') return void (ui.pending = 'g');
+    else if (k === 'j' || k === '\x1b[B') peekMove(1, h);
+    else if (k === 'k' || k === '\x1b[A') peekMove(-1, h);
+    else if (k === '\x04' || k === '\x1b[6~') peekMove(Math.floor(h / 2), h);
+    else if (k === '\x15' || k === '\x1b[5~') peekMove(-Math.floor(h / 2), h);
+    else if (k === 'G') peekMove(p.rows.length, h);
+    else if (k === 'n' || k === 'N' || k === '\t') {
+      if (p.targets.length < 2) return flash('the only place this points at', 'dim');
+      p.i = (p.i + (k === 'N' ? p.targets.length - 1 : 1)) % p.targets.length;
+      return void peekLoad();
+    } else if (/^[1-9]$/.test(k)) {
+      // the place with that number in the pane's list
+      if (Number(k) > p.targets.length) return flash(`${p.targets.length === 1 ? 'one place' : `${p.targets.length} places`} here`, 'dim');
+      p.i = Number(k) - 1;
+      return void peekLoad();
+    } else if (k === '+' || k === '-') {
+      const i = CONTEXTS.indexOf(p.context);
+      p.context = CONTEXTS[Math.max(0, Math.min(CONTEXTS.length - 1, i + (k === '+' ? 1 : -1)))];
+      peekLayout();
+      if (p.context === Infinity) flash('the whole file', 'dim');
+    } else if (k === '=') p.full = !p.full;
+    else if (k === '\r') return peekGo();
+    else if (k === 'o') {
+      if (t.error || !t.dir) return flash('nothing to open', 'dim');
+      let file = path.join(t.dir, t.file);
+      // at the cursor's line (a removed line: the next one there is)
+      const below = p.rows.slice(p.cur).map((r) => peekLine(t, r)).find((l) => l && (t.side === 'old' ? l.side === 'old' : l.side === 'new'));
+      const line = below?.n ?? t.from ?? 1;
+      if (t.rev) {
+        // the base: a copy to read (the worktree has the new side)
+        const got = p.cache.get(t);
+        file = path.join(os.tmpdir(), `fr-base-${process.pid}-${path.basename(t.file)}`);
+        try {
+          fs.writeFileSync(file, (got?.lines ?? []).filter((l) => l.t !== (t.side === 'old' ? '+' : '-')).map((l) => l.s).join('\n') + '\n', { mode: 0o400 });
+        } catch {}
+      }
+      return runEditor(file, line);
+    } else if (k === '\x1b' || k === 'p' || k === 'q') closePeek();
+    else if (k === '?') ui.help = true;
+    draw();
+  }
+  /** ⏎ in the peek: to that code in the review; gt comes back, the peek open again. */
+  function peekGo() {
+    const p = ui.peek;
+    const t = p.targets[p.i];
+    if (t.error || t.external || !t.units.length) return flash(t.external ? 'outside the feature: o opens it in the editor' : 'not part of the change: + shows more of it, o opens it in the editor', 'dim');
+    // the cursor's line, in the hunk that has it
+    const l = peekLine(t, p.rows[p.cur]);
+    const f = ui.ws.repos.find((r) => r.name === t.repo)?.files.find((x) => (l?.side === 'old' ? (x.old ?? x.file) : x.file) === t.file);
+    const h = l && f?.hunks.find((x) => {
+      const [a, n] = l.side === 'old' ? [x.oldStart, x.oldCount] : [x.newStart, x.newCount];
+      return l.n >= a && l.n < a + Math.max(1, n);
+    });
+    if (!h) return flash('this line is not part of the change: the tinted lines are', 'dim');
+    // the row, and which of the rows alike it is (prose rows share a key)
+    const key = rowKey(ui.rows[ui.cur]);
+    const nth = ui.rows.slice(0, ui.cur).filter((r) => rowKey(r) === key).length;
+    const from = { key, nth, off: ui.cur - p.back.top, ov: ui.ov, peek: p };
+    closePeek();
+    ui.ov = null;
+    jumpTo({ ...t, units: [h.key], side: l.side, from: l.n, to: l.n });
+    // gt goes back while the reader stays in the file they went to
+    ui.jumpBack = { ...from, fid: ui.rows[ui.cur]?.fid ?? null };
+    flash(`${t.repo}/${t.file}:${l.side === 'old' ? '-' : ''}${l.n}   gt: back`, 'cyan');
+    draw();
+  }
+  function goBack() {
+    const b = ui.jumpBack;
+    ui.jumpBack = null;
+    relayout(b.key);
+    let n = 0;
+    const i = ui.rows.findIndex((r) => rowKey(r) === b.key && n++ === b.nth);
+    if (i >= 0) ui.cur = i;
+    ui.top = Math.max(0, ui.cur - b.off);
+    if (b.ov) {
+      ui.ov = b.ov;
+      ovLayout();
+    }
+    ui.peek = b.peek;
+    peekLayout();
     draw();
   }
 
@@ -1173,6 +1435,7 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
       if (k === 'r') return void reload();
       return;
     }
+    if (ui.peek) return peekKey(k);
     if (ui.ov) return ovKey(k);
     if (ui.layers) return layersKey(k);
     if (ui.fb) return feedbackKey(k);
@@ -1180,7 +1443,7 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
     const p = ui.pending;
     ui.pending = '';
     if (p === 'g' && k === 'g') (ui.cur = 0), move(0);
-    else if (p === 'g' && k === 't') return jumpToPair();
+    else if (p === 'g' && k === 't') return ui.jumpBack && ui.rows[ui.cur]?.fid === ui.jumpBack.fid ? goBack() : jumpToPair();
     else if (p === ']' || p === '[') {
       const dir = p === ']' ? 1 : -1;
       if (k === p) jump((r) => r.kind === 'file' || r.kind === 'part', dir);
@@ -1226,6 +1489,7 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
     else if (k === 'e') return editAt();
     else if (k === 'x') return deleteAt();
     else if (k === 'o') return openEditor();
+    else if (k === 'p') return void openPeek();
     else if (k === '!') return startFeedback();
     else if (k === 'A') return startAsk();
     else if (k === 's') {
@@ -1260,6 +1524,7 @@ export async function runViewer({ hlBudget = 40_000, feedbackFile = feedbackPath
   const onResize = () => {
     relayout();
     if (ui.ov) ovLayout();
+    if (ui.peek) peekLayout();
     draw();
   };
   out.on('resize', onResize);

@@ -16,6 +16,7 @@ export const STYLE = {
   addbg: '48;2;35;52;40', delbg: '48;2;58;34;40', addword: '48;2;48;84;56', delword: '48;2;100;44;54',
   addfg: '38;5;114', delfg: '38;5;174', filler: '38;5;238',
   code: '38;5;180', link: '4;38;5;111',
+  rule: 34,
 };
 const code = (n) => (STYLE[n] !== undefined ? STYLE[n] : /^[\d;]+$/.test(n) ? n : null);
 /** The escape sequence for a style ('' for none). */
